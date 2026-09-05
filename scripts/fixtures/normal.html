@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta property="og:title" content="正常文章夹具">
+    <meta name="author" content="Fixture Author">
+    <meta property="article:published_time" content="2026-07-30T09:00:00+08:00">
+  </head>
+  <body>
+    <article>
+      <p>这是正常文章的第一段，用于验证可见正文、标题、作者、发布时间和段落顺序都可以被稳定提取。这里补充足够长度，避免正文容器因为内容过短而被错误忽略。</p>
+      <p>这是第二段，包含一个<a href="https://example.com/source">可追溯链接</a>，用于验证链接文本和绝对地址能够一起保留，同时不会触发任何文件写入。</p>
+      <figure><img src="https://example.com/image.png" alt="测试图片"><figcaption>测试图片说明</figcaption></figure>
+      <table><tbody><tr><th>项目</th><th>结果</th></tr><tr><td>正文读取</td><td>通过</td></tr></tbody></table>
+      <p>这是最后一段，用于确认正文块仍然保持原始 DOM 顺序，并为后续摘要和评判提供完整、连续且可验证的输入材料。</p>
+    </article>
+  </body>
+</html>
