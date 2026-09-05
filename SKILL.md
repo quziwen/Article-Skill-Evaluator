@@ -242,7 +242,7 @@ bash scripts/vetter/vett.sh "<skill-or-repo-or-path>"       # 评估：安全扫
 当用户要求"做成播客/生成音频、出Quiz/闪卡、绕过付费墙读付费文章"时，进入本模式——对已取得内容做加工型增强。能力源自合并的 Content-Enhancer，细节见 `references/enhance/`。
 
 1. **文章转播客（TTS）**：结构化内容为播客脚本（开场引入→章节要点→总结收尾）→ 调用 `text_to_speech` 生成 MP3 → 输出到桌面或指定位置。细节见 [references/enhance/podcast.md](references/enhance/podcast.md)。触发："把这篇文章做成播客""生成音频摘要"。
-2. **Quiz/闪卡生成**：提取关键知识点 → 生成 3-5 道题（选择题+问答题）→ 生成闪卡（正面=问题，背面=答案）→ 输出结构化 Markdown。细节见 [references/enhance/quiz-flashcard.md](references/enhance/quiz-flashcard.md)。触发："给这篇文章出Quiz""生成闪卡"。
+2. **Quiz/闪卡生成（三选一产出，用户可选）**：提取关键知识点 → 生成 3-5 道题（选择题+问答题）+ 闪卡 → 先出 Markdown 底稿，再按用户选择产出最终形态：①对话内交互测验（默认，渲染可点选、当场判分）②单文件 HTML 测验页（内联无依赖，可发群里/飞书，浏览器打开即做）③Anki 导入 CSV（间隔重复记忆）。用户说"HTML/发群里"→②，说"Anki/记忆卡"→③，说"做题/自测"或未指定→①。细节见 [references/enhance/quiz-flashcard.md](references/enhance/quiz-flashcard.md)。触发："给这篇文章出Quiz""生成闪卡""出Quiz要HTML版""出Quiz要Anki"。
 3. **付费墙绕过（仅用户明确要求）**：**默认不启用**。仅当用户明确说"绕过付费墙读这篇XX"时才执行，按 6 层顺序（Jina Reader → Googlebot UA → AMP/清cookie → archive.today → Google Cache → xcrawl）尝试，成功即止。优先公开快照层（archive.today/代理），身份伪装层（Googlebot UA）仅用户点名时用。仅供个人学习研究，公司业务走合法渠道。细节见 [references/enhance/paywall-bypass.md](references/enhance/paywall-bypass.md)。
 
 ## 输出要求
