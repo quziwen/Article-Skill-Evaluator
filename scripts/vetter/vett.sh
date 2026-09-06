@@ -1,239 +1,184 @@
-#!/bin/bash
-# vett.sh — multi-scanner security gate for OpenClaw skills
-# Usage: bash vett.sh <skill-name | github-url | local-path>
+#!/usr/bin/env bash
+# Multi-scanner security gate. SAFE is emitted only when every required scan ran.
 
-set -euo pipefail
-
-# Ensure Go binaries are in PATH
-export PATH="$HOME/go/bin:$PATH"
+set -uo pipefail
 
 INPUT="${1:-}"
-if [ -z "$INPUT" ]; then
+if [[ -z "$INPUT" ]]; then
     echo "Usage: bash vett.sh <skill-name | github-url | local-path>"
-    exit 1
+    exit 2
 fi
 
-TMPDIR_BASE=$(mktemp -d /tmp/skill-vetter-XXXXXX)
-trap 'rm -rf "$TMPDIR_BASE"' EXIT
+TEMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/article-reader-vetter.XXXXXX") || exit 2
+cleanup() { rm -rf -- "$TEMP_ROOT"; }
+trap cleanup EXIT
 
 SKILL_DIR=""
 SKILL_NAME=""
-
-# ── Resolve input to a local directory ──────────────────────────────────────
-
-if [ -d "$INPUT" ]; then
-    SKILL_DIR="$INPUT"
-    SKILL_NAME=$(basename "$INPUT")
-elif echo "$INPUT" | grep -q "^https://github.com"; then
+if [[ -d "$INPUT" ]]; then
+    SKILL_DIR=$(cd "$INPUT" && pwd -P) || exit 2
+    SKILL_NAME=$(basename "$SKILL_DIR")
+elif [[ "$INPUT" == https://github.com/* ]]; then
+    command -v git >/dev/null 2>&1 || { echo "INCOMPLETE: git is required for GitHub input"; exit 2; }
     SKILL_NAME=$(basename "$INPUT" .git)
-    SKILL_DIR="$TMPDIR_BASE/$SKILL_NAME"
-    echo "📥 Cloning $INPUT ..."
-    git clone --depth 1 "$INPUT" "$SKILL_DIR" 2>/dev/null
+    SKILL_DIR="$TEMP_ROOT/$SKILL_NAME"
+    git clone --depth 1 -- "$INPUT" "$SKILL_DIR" >/dev/null 2>&1 \
+        || { echo "INCOMPLETE: repository could not be cloned"; exit 2; }
 else
-    # Treat as a ClawHub skill name — download via clawhub to tmp
+    command -v clawhub >/dev/null 2>&1 || { echo "INCOMPLETE: clawhub is required for registry input"; exit 2; }
     SKILL_NAME="$INPUT"
-    SKILL_DIR="$TMPDIR_BASE/$SKILL_NAME"
-    echo "📥 Downloading $SKILL_NAME from ClawHub to temp directory..."
-    # Use --workdir and --dir to install to temp location
-    clawhub --workdir "$TMPDIR_BASE" --dir . install "$SKILL_NAME" --force 2>/dev/null \
-        || { echo "❌ Could not download skill '$SKILL_NAME' from ClawHub"; exit 1; }
+    SKILL_DIR="$TEMP_ROOT/$SKILL_NAME"
+    clawhub --workdir "$TEMP_ROOT" --dir . install "$SKILL_NAME" --force >/dev/null 2>&1 \
+        || { echo "INCOMPLETE: registry package could not be downloaded"; exit 2; }
 fi
-
-echo ""
-echo "════════════════════════════════════════════════════════════"
-echo "SKILL VETTER — Security Scan: $SKILL_NAME"
-echo "Path: $SKILL_DIR"
-echo "════════════════════════════════════════════════════════════"
-echo ""
 
 FAILURES=0
 WARNINGS=0
-REPORT=""
+INCOMPLETE=0
+REPORT=()
 
-append() {
-    REPORT="${REPORT}\n$1"
-}
+record_failure() { FAILURES=$((FAILURES + 1)); REPORT+=("BLOCKED: $1"); }
+record_warning() { WARNINGS=$((WARNINGS + 1)); REPORT+=("REVIEW: $1"); }
+record_incomplete() { INCOMPLETE=$((INCOMPLETE + 1)); REPORT+=("INCOMPLETE: $1"); }
+record_pass() { REPORT+=("PASS: $1"); }
 
-# ── Scanner 1: aguara (prompt injection detection) ──────────────────────────
+echo "SKILL VETTER: $SKILL_NAME"
+echo "Path: $SKILL_DIR"
 
-scan_aguara() {
-    echo "[1/4] aguara............."
-    
-    if ! command -v aguara &>/dev/null; then
-        append "⚠️  aguara not installed — skipping"
-        echo "                      ⚠️  SKIP — not installed"
-        echo "                         https://github.com/garagon/aguara"
-        return 0
-    fi
-    
-    local result
-    result=$(aguara scan "$SKILL_DIR" --format json 2>/dev/null)
-    
-    # Check for high severity findings (severity >= 4)
-    local high_count
-    high_count=$(echo "$result" | jq '[.findings[] | select(.severity >= 4)] | length' 2>/dev/null || echo "0")
-    
-    local medium_count
-    medium_count=$(echo "$result" | jq '[.findings[] | select(.severity >= 3 and .severity < 4)] | length' 2>/dev/null || echo "0")
-    
-    if [ "$high_count" -gt 0 ]; then
-        append "❌ aguara: $high_count HIGH severity findings detected"
-        echo "$result" | jq -r '.findings[] | select(.severity >= 4) | "   → \(.rule_id): \(.description) (\(.file_path):\(.line))"' 2>/dev/null
-        echo "                      ❌ FAIL ($high_count high)"
-        ((FAILURES++)) || true
-    elif [ "$medium_count" -gt 0 ]; then
-        append "⚠️  aguara: $medium_count MEDIUM severity findings (review manually)"
-        echo "$result" | jq -r '.findings[] | select(.severity >= 3 and .severity < 4) | "   → \(.rule_id): \(.description) (\(.file_path):\(.line))"' 2>/dev/null
-        echo "                      ⚠️  WARN ($medium_count medium)"
-        ((WARNINGS++)) || true
+echo "[1/4] aguara"
+if ! command -v aguara >/dev/null 2>&1; then
+    echo "  INCOMPLETE - scanner is not installed"
+    record_incomplete "aguara did not run"
+elif ! command -v python3 >/dev/null 2>&1; then
+    echo "  INCOMPLETE - python3 is needed to validate scanner JSON"
+    record_incomplete "aguara output could not be validated"
+else
+    aguara_json=""
+    if ! aguara_json=$(aguara scan "$SKILL_DIR" --format json 2>/dev/null); then
+        echo "  INCOMPLETE - scanner returned an error"
+        record_incomplete "aguara returned an error"
     else
-        append "✅ aguara: No prompt injection patterns found"
-        echo "                      ✅ PASS"
-    fi
-}
-
-# ── Scanner 2: skill-analyzer (Cisco vulnerability scanner) ────────────────
-
-scan_skill_analyzer() {
-    echo "[2/4] skill-analyzer....."
-    
-    if ! command -v skill-scanner &>/dev/null; then
-        append "⚠️  skill-scanner not installed — skipping"
-        echo "                      ⚠️  SKIP — not installed"
-        echo "                         https://pypi.org/project/cisco-ai-skill-scanner/"
-        return 0
-    fi
-
-    local result
-    result=$(skill-scanner scan "$SKILL_DIR" --format json 2>/dev/null || echo '{"severity":"unknown"}')
-    
-    local severity
-    severity=$(echo "$result" | jq -r '.severity // "unknown"')
-    
-    case "$severity" in
-        critical|high)
-            append "❌ skill-scanner: $severity severity - $(echo "$result" | jq -r '.description // "unknown issue"')"
-            echo "                      ❌ FAIL ($severity)"
-            ((FAILURES++)) || true
-            ;;
-        medium)
-            append "⚠️  skill-scanner: Medium severity - $(echo "$result" | jq -r '.description // "unknown issue"')"
-            echo "                      ⚠️  WARN (medium)"
-            ((WARNINGS++)) || true
-            ;;
-        low|none|unknown)
-            append "✅ skill-scanner: No critical vulnerabilities found"
-            echo "                      ✅ PASS"
-            ;;
-    esac
-}
-
-# ── Scanner 3: secrets-scan (hardcoded credentials) ─────────────────────────
-
-scan_secrets() {
-    echo "[3/4] secrets-scan......."
-    
-    local found_secrets=0
-    
-    # Check for common secret patterns
-    if grep -rqE "(api_key|apikey|secret|token|password|credential).*=.*['\"][A-Za-z0-9_\-]{16,}['\"]" "$SKILL_DIR" 2>/dev/null; then
-        found_secrets=1
-    fi
-
-    # Check for base64 encoded strings that might be secrets
-    local found_base64=0
-    if grep -rqE "['\"][A-Za-z0-9+/]{40,}={0,2}['\"]" "$SKILL_DIR" --include="*.sh" --include="*.py" --include="*.js" 2>/dev/null; then
-        found_base64=1
-    fi
-
-    if [ $found_secrets -eq 1 ]; then
-        append "❌ secrets-scan: Hardcoded credentials detected"
-        echo "                      ❌ FAIL (credentials found)"
-        ((FAILURES++)) || true
-    elif [ $found_base64 -eq 1 ]; then
-        append "⚠️  secrets-scan: Found base64 encoded strings (review manually)"
-        echo "                      ⚠️  WARN (base64 strings)"
-        ((WARNINGS++)) || true
-    else
-        append "✅ secrets-scan: No hardcoded secrets found"
-        echo "                      ✅ PASS"
-    fi
-}
-
-# ── Scanner 4: structure-check (required files, dangerous patterns) ─────────
-
-scan_structure() {
-    echo "[4/4] structure-check...."
-    
-    local issues=0
-    
-    # Check for SKILL.md
-    if [ ! -f "$SKILL_DIR/SKILL.md" ]; then
-        append "❌ structure-check: Missing SKILL.md"
-        ((issues++)) || true
-    fi
-    
-    # Check for README.md (SKILL.md should be the primary doc)
-    if [ -f "$SKILL_DIR/README.md" ]; then
-        append "ℹ️  structure-check: README.md exists (SKILL.md is the primary doc for agents)"
-    fi
-    
-    # Check for dangerous commands in scripts and code
-    if grep -rqE "(rm -rf|curl.*\|.*bash|wget.*\|.*sh|eval\s|exec\s)" "$SKILL_DIR" --include="*.sh" --include="*.py" --include="*.js" --exclude="vett.sh" 2>/dev/null; then
-        append "❌ structure-check: Dangerous shell commands detected"
-        ((issues++)) || true
-    fi
-    
-    # Check YAML frontmatter in SKILL.md
-    if [ -f "$SKILL_DIR/SKILL.md" ]; then
-        if ! head -5 "$SKILL_DIR/SKILL.md" | grep -q "^---"; then
-            append "⚠️  structure-check: SKILL.md missing YAML frontmatter"
-            ((WARNINGS++)) || true
+        aguara_counts=$(printf '%s' "$aguara_json" | python3 -c 'import json,sys
+try:
+ d=json.load(sys.stdin); f=d.get("findings")
+ if not isinstance(f,list): raise ValueError()
+ high=sum(1 for x in f if isinstance(x,dict) and isinstance(x.get("severity"),(int,float)) and x["severity"]>=4)
+ medium=sum(1 for x in f if isinstance(x,dict) and isinstance(x.get("severity"),(int,float)) and 3<=x["severity"]<4)
+ print(high,medium)
+except Exception:
+ print("INVALID")')
+        if [[ "$aguara_counts" == "INVALID" ]]; then
+            echo "  INCOMPLETE - unrecognized JSON"
+            record_incomplete "aguara output schema was unrecognized"
+        else
+            read -r high_count medium_count <<< "$aguara_counts"
+            if (( high_count > 0 )); then
+                echo "  BLOCKED - $high_count high-severity finding(s)"
+                record_failure "aguara found $high_count high-severity item(s)"
+            elif (( medium_count > 0 )); then
+                echo "  REVIEW - $medium_count medium-severity finding(s)"
+                record_warning "aguara found $medium_count medium-severity item(s)"
+            else
+                echo "  PASS"
+                record_pass "aguara ran with no medium/high findings"
+            fi
         fi
     fi
-    
-    if [ $issues -gt 0 ]; then
-        echo "                      ❌ FAIL ($issues issues)"
-        ((FAILURES++)) || true
-    else
-        append "✅ structure-check: Skill structure valid"
-        echo "                      ✅ PASS"
-    fi
-}
-
-# ── Run all scanners ────────────────────────────────────────────────────────
-
-scan_aguara
-scan_skill_analyzer
-scan_secrets
-scan_structure
-
-# ── Generate verdict ────────────────────────────────────────────────────────
-
-echo ""
-echo "════════════════════════════════════════════════════════════"
-
-if [ $FAILURES -gt 0 ]; then
-    echo "VERDICT: 🚫 BLOCKED"
-    echo "Reasons: $FAILURES HIGH/CRITICAL, $WARNINGS MEDIUM"
-    echo "════════════════════════════════════════════════════════════"
-    echo ""
-    echo "Do NOT install this skill. Issues found:"
-    echo -e "$REPORT"
-    exit 1
-elif [ $WARNINGS -gt 0 ]; then
-    echo "VERDICT: ⚠️  REVIEW NEEDED"
-    echo "Reasons: $WARNINGS MEDIUM severity findings"
-    echo "════════════════════════════════════════════════════════════"
-    echo ""
-    echo "Review these findings before installing:"
-    echo -e "$REPORT"
-    exit 0
-else
-    echo "VERDICT: ✅ SAFE"
-    echo "All scanners passed"
-    echo "════════════════════════════════════════════════════════════"
-    echo ""
-    echo -e "$REPORT"
-    exit 0
 fi
+
+echo "[2/4] skill-scanner"
+if ! command -v skill-scanner >/dev/null 2>&1; then
+    echo "  INCOMPLETE - scanner is not installed"
+    record_incomplete "skill-scanner did not run"
+elif ! command -v python3 >/dev/null 2>&1; then
+    echo "  INCOMPLETE - python3 is needed to validate scanner JSON"
+    record_incomplete "skill-scanner output could not be validated"
+else
+    scanner_json=""
+    if ! scanner_json=$(skill-scanner scan "$SKILL_DIR" --format json 2>/dev/null); then
+        echo "  INCOMPLETE - scanner returned an error"
+        record_incomplete "skill-scanner returned an error"
+    else
+        severity=$(printf '%s' "$scanner_json" | python3 -c 'import json,sys
+try:
+ d=json.load(sys.stdin); s=d.get("severity")
+ print(s.lower() if isinstance(s,str) else "invalid")
+except Exception:
+ print("invalid")')
+        case "$severity" in
+            critical|high)
+                echo "  BLOCKED - $severity"
+                record_failure "skill-scanner reported $severity"
+                ;;
+            medium)
+                echo "  REVIEW - medium"
+                record_warning "skill-scanner reported medium"
+                ;;
+            low|none|safe|clean)
+                echo "  PASS"
+                record_pass "skill-scanner ran and reported $severity"
+                ;;
+            *)
+                echo "  INCOMPLETE - unrecognized verdict: $severity"
+                record_incomplete "skill-scanner verdict was unrecognized"
+                ;;
+        esac
+    fi
+fi
+
+echo "[3/4] local secrets scan"
+if grep -rqE --include='*.sh' --include='*.py' --include='*.js' --include='*.cjs' --include='*.mjs' \
+    "(api_key|apikey|secret|token|password|credential)[[:space:]]*=[[:space:]]*['\"][A-Za-z0-9_/-]{16,}['\"]" "$SKILL_DIR" 2>/dev/null; then
+    echo "  BLOCKED - possible hardcoded credential"
+    record_failure "local scan found a possible hardcoded credential"
+elif grep -rqE --include='*.sh' --include='*.py' --include='*.js' --include='*.cjs' --include='*.mjs' \
+    "['\"][A-Za-z0-9+/]{40,}={0,2}['\"]" "$SKILL_DIR" 2>/dev/null; then
+    echo "  REVIEW - long base64-like literal"
+    record_warning "local scan found a long base64-like literal"
+else
+    echo "  PASS"
+    record_pass "local secrets scan found no configured pattern"
+fi
+
+echo "[4/4] structure check"
+structure_issues=0
+if [[ ! -f "$SKILL_DIR/SKILL.md" ]]; then
+    structure_issues=$((structure_issues + 1))
+    REPORT+=("BLOCKED: SKILL.md is missing")
+fi
+if [[ -f "$SKILL_DIR/SKILL.md" ]] && ! head -n 5 "$SKILL_DIR/SKILL.md" | grep -q '^---$'; then
+    structure_issues=$((structure_issues + 1))
+    REPORT+=("BLOCKED: SKILL.md frontmatter is missing or malformed")
+fi
+if grep -rqE --include='*.sh' --include='*.py' --include='*.js' --include='*.cjs' --include='*.mjs' \
+    --exclude='vett.sh' '(rm[[:space:]]+-rf|curl[^|]*\|[[:space:]]*(bash|sh)|wget[^|]*\|[[:space:]]*(bash|sh)|eval[[:space:]])' \
+    "$SKILL_DIR" 2>/dev/null; then
+    structure_issues=$((structure_issues + 1))
+    REPORT+=("BLOCKED: dangerous execution pattern requires manual review")
+fi
+if (( structure_issues > 0 )); then
+    echo "  BLOCKED - $structure_issues issue(s)"
+    FAILURES=$((FAILURES + structure_issues))
+else
+    echo "  PASS"
+    record_pass "required structure and dangerous-pattern checks passed"
+fi
+
+echo
+for line in "${REPORT[@]}"; do echo "$line"; done
+if (( FAILURES > 0 )); then
+    echo "VERDICT: BLOCKED"
+    exit 1
+fi
+if (( INCOMPLETE > 0 )); then
+    echo "VERDICT: INCOMPLETE"
+    echo "No SAFE claim is allowed because $INCOMPLETE required scan(s) did not complete."
+    exit 2
+fi
+if (( WARNINGS > 0 )); then
+    echo "VERDICT: REVIEW"
+    exit 2
+fi
+echo "VERDICT: SAFE"
+echo "All required scanners and local checks completed without findings."
+exit 0

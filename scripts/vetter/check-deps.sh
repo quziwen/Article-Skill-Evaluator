@@ -1,54 +1,20 @@
-#!/bin/bash
-# check-deps.sh — verify required tools are available
+#!/usr/bin/env bash
+# Read-only dependency check. It never installs or changes system software.
 
-set -euo pipefail
+set -uo pipefail
 
-# Ensure Go binaries are in PATH
-export PATH="$HOME/go/bin:$PATH"
+missing_required=()
+for dependency in aguara skill-scanner python3; do
+    command -v "$dependency" >/dev/null 2>&1 || missing_required+=("$dependency")
+done
 
-MISSING=()
-
-check() {
-    command -v "$1" &>/dev/null || MISSING+=("$1")
-}
-
-check aguara
-check skill-scanner
-check python3
-check curl
-check jq
-check git
-
-if [ ${#MISSING[@]} -eq 0 ]; then
-    echo "✅ All dependencies present"
-    echo ""
-    echo "Scanners available:"
-    echo "  • aguara (prompt injection detection)"
-    echo "  • skill-scanner (Cisco AI vulnerability scanner)"
-    echo "  • python3 (additional checks)"
-    exit 0
-else
-    echo "❌ Missing dependencies: ${MISSING[*]}"
-    echo ""
-    echo "Install instructions:"
-    for dep in "${MISSING[@]}"; do
-        case $dep in
-            aguara)
-                echo "  aguara: go install github.com/garagon/aguara/cmd/aguara@latest"
-                ;;
-            skill-scanner)
-                echo "  skill-scanner: pip install cisco-ai-skill-scanner"
-                ;;
-            jq)
-                echo "  jq: brew install jq (macOS) or apt install jq (Linux)"
-                ;;
-            git)
-                echo "  git: brew install git (macOS) or apt install git (Linux)"
-                ;;
-            *)
-                echo "  $dep: install manually"
-                ;;
-        esac
-    done
+echo "Required for a SAFE verdict: aguara, skill-scanner, python3"
+if (( ${#missing_required[@]} > 0 )); then
+    echo "INCOMPLETE: missing ${missing_required[*]}"
+    echo "The vetter may still run local checks, but it must not report SAFE."
     exit 1
 fi
+
+echo "PASS: all required scanner dependencies are present"
+echo "Optional by input type: git for GitHub URLs; clawhub for registry names"
+exit 0

@@ -37,6 +37,15 @@ ARTICLE_READER_PLAYWRIGHT_ROOT=<trusted-project-root>
 
 不得让脚本自动执行 `npm install`、下载浏览器、复用个人 profile 或写入文章文件。
 
+Python 兜底使用当前环境已经安装的 Playwright：
+
+```text
+python scripts/test-playwright-policy.py
+python scripts/read-article-playwright.py "<public-url>"
+```
+
+该脚本正文写入唯一临时 JSON，stdout 只输出 ASCII JSON 摘要；指定 `--out` 时默认拒绝覆盖。它会在导航前、网络请求和重定向后检查地址，阻断凭证、localhost、私网、链路本地和保留地址。策略测试通过不等于动态站点已真实读取成功，目标站仍需单独实测。
+
 ## 成功判定
 
 - `status` 为 `PASS`。

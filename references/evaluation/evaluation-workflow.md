@@ -51,7 +51,7 @@
 - 判断级：供应链（npx/pip 拉包、非官方源、单作者低星）、权限与数据（读什么、外发什么）、维护断供
 - 内控视角（用户若有审计/内控/合规背景，或画像中体现该要求）：执行 VBA/宏、改活文件、自动提交、改配置权限 → 提示审批链与留痕（segregation of duties / 可审计性 / change control）。画像无此要求时，仍提示高风险动作的可审计性，但不过度强化。
 - 外部组件：skill 只是薄壳时，真本事在它调用的外部组件（npx/pip 包、二进制、浏览器驱动、第三方 CLI）。**单独评估那个组件**：来源是否官方、是否提权、是否处理凭证/cookie、是否读敏感数据、是否违反 ToS。vetter 扫不到外部组件，必须单独评并明写。
-- 代码级：调用 `scripts/vetter/vett.sh` 扫描（见 [vetter.md](vetter.md)），吸收 BLOCKED/REVIEW/SAFE 裁决
+- 代码级：调用 `scripts/vetter/vett.sh` 扫描（见 [vetter.md](vetter.md)），吸收 BLOCKED/REVIEW/INCOMPLETE/SAFE 裁决；缺扫描器或执行报错不得记为 SAFE
 - 结论：低 / 中 / 高，写清主要风险点 + 注明 vetter 裁决（或未执行）
 
 ### 步骤 3：查重（用户最在意）
@@ -93,7 +93,7 @@
 **7. 有风险吗**：<低 / 中 / 高>
 - 判断级：供应链 / 权限与数据 / 内控留痕 / 维护断供
 - 外部组件：<它调用/依赖的包·二进制·浏览器·CLI；该组件来源、提权、凭证、ToS 风险>
-- 代码级（vetter 裁决）：<BLOCKED / REVIEW / SAFE / 未执行，注明"只覆盖 skill 壳">
+- 代码级（vetter 裁决）：<BLOCKED / REVIEW / INCOMPLETE / SAFE / 未执行，注明"只覆盖 skill 壳">
 
 **8. 是否已有重复/类似**：<无 / 有（你已装 X，重叠在…）>
 

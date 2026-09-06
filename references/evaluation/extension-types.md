@@ -105,7 +105,7 @@ mkdir -p ~/.claude/agents   && cp <name>.md ~/.claude/agents/     # 个人级 su
 - 就是个命令行程序或库（pip / npm 包），通篇没提 Claude、agent、MCP、skill。
 - 例如文档里上传的 Content Enhancer 用到的 `edge-tts`、`playwright`、`beautifulsoup4`。
 
-**适配判断**：⚠️ 不是 Claude Code 原生扩展，但**可以用一个 skill 把它包装起来**——这正是 Content Enhancer 那份文档干的事（把 edge-tts、付费墙绕过封装成可复用流程）。
+**适配判断**：⚠️ 不是 Claude Code 原生扩展，但可以用 Skill 包装经过审查且获授权的本地流程；包装不会扩大底层工具的权限，也不得把访问控制规避能力纳入流程。
 - 建议路径：装好底层工具（pip/npm），再写一个薄薄的 SKILL.md 教 Claude 何时、如何调用它。
 
 ---

@@ -1,10 +1,10 @@
 # Article Reader — 文章读取、深度解读、工具评估与内容增强
 
-> 版本：v2.2（2026-09-05）
+> 版本：v2.2.1（2026-09-06）
 
 一个面向 AI Agent 的**四合一文章处理 Skill**：读取网页/PDF/飞书文档 → 深度解读 → 评估文章中介绍的工具是否值得安装 → 将文章加工为播客/Quiz/闪卡。
 
-支持 DSH（DeepSeek Harness）/ Claude Code / Codex / Hermes / Cursor / Gemini / TRAE 等所有使用 `SKILL.md` 规范的 Agent 环境。
+面向能够读取 `SKILL.md` 和包内相对路径文件的 Agent 环境。自动发现、浏览器控制、TTS、文件写入和外部扫描能力取决于具体宿主，需在当前环境实测，不能由安装说明推定。
 
 ---
 
@@ -13,7 +13,7 @@
 ### 1. 读取模式（默认）
 - 只读抓取网页、微信公众号、今日头条、知乎、PDF、飞书文档等
 - 输出三段简报：文章讲什么 / 主要观点 / 初步可信度
-- 头条等反爬站点自动走 Python Playwright 真实浏览器路线
+- 动态站点可在当前环境已安装 Playwright 时走临时浏览器路线；真实可读性按目标页面逐次验证
 
 ### 2. 深度模式
 - 10+ 思维框架，四档深度可选：
@@ -25,13 +25,13 @@
 ### 3. 评估模式
 - 读取到的文章若在介绍 skill / 插件 / MCP / CLI / 工具，**自动穿透导读壳**，评估底层项目
 - 三轴评估：值得装（客观质量）/ 适合你（结合用户画像）/ 有风险（供应链、权限、外部组件、代码级扫描）
-- 内置安全扫描器（skill-vetter 集成：aguara / skill-analyzer / secrets-scan / structure-check）
+- 内置安全扫描编排（aguara / skill-scanner / secrets-scan / structure-check）；缺任一必需扫描器时输出 INCOMPLETE，不会误报 SAFE
 - 绝不自动安装，先给「装不装」决策报告，用户确认后才给安装命令
 
 ### 4. 增强模式
 - **文章转播客**：结构化内容 → TTS 生成 MP3
-- **Quiz / 闪卡生成**：提取知识点 → 自测题 + 记忆卡片
-- **付费墙读取**（仅用户明确要求时）：6 层策略，优先公开快照，仅供个人学习研究
+- **Quiz / 闪卡生成**：提取知识点，并用确定性脚本生成 Markdown、离线 HTML 或 Anki CSV
+- **付费内容读取**：只使用用户已有授权会话、用户导出文件、机构许可渠道或发布方公开替代版本，不绕过访问控制
 
 ---
 
@@ -58,9 +58,9 @@
 |------|------|---------|
 | Node.js | 基础读取执行器 | `node -v` |
 | Python 3 + Playwright + Chromium | 头条/微信等反爬站点 | `python -c "import playwright"` |
-| vetter 扫描器（可选） | 评估模式安全扫描 | `bash scripts/vetter/check-deps.sh` |
+| aguara + skill-scanner + Python 3 | 完整代码扫描；缺失时只能得出 INCOMPLETE | `bash scripts/vetter/check-deps.sh` |
 
-> 脚本不自动安装依赖。Python Playwright 需手动装：`pip install playwright && python -m playwright install chromium`。
+> 脚本不自动安装依赖、不调用 sudo、不克隆安装器。请通过组织认可的包管理流程固定并审查 Playwright、浏览器与扫描器版本。
 
 ---
 
@@ -76,7 +76,7 @@
 帮我看看这个 skill/插件 <链接>         → 评估模式
 把这篇文章做成播客 <链接>              → 增强模式：TTS 音频
 给这篇文章出 Quiz <链接>              → 增强模式：自测题
-绕过付费墙读这篇 <链接>               → 增强模式：付费墙读取（需明确要求）
+读取这篇付费文章 <链接>                 → 增强模式：仅走已有授权或公开替代版本
 ```
 
 ### 命令行直接调用
@@ -94,6 +94,8 @@ bash scripts/vetter/vett.sh "<skill-or-repo-or-path>"
 # 自检
 node scripts/read-article.cjs --self-test
 node scripts/test-routing.cjs
+python scripts/test-playwright-policy.py
+node scripts/test-quiz-renderer.mjs
 ```
 
 ---
@@ -117,6 +119,7 @@ article-reader/
 └── scripts/
     ├── read-article.cjs          # Node 无 Cookie HTTP 提取器
     ├── read-article-playwright.py# Python Playwright 反爬兜底
+    ├── render-quiz.mjs           # Markdown/HTML/Anki 确定性渲染
     ├── extract-visible-article.js# 可见 DOM 提取
     ├── test-routing.cjs          # 触发/分流回归测试
     ├── fixtures/                 # 测试夹具
@@ -127,10 +130,10 @@ article-reader/
 
 ## 🛠 技术说明
 
-- **只读安全**：不保存、不归档、不同步、不发消息、不自动登录；不绕过验证码/登录墙（付费墙仅在用户明确要求时按 6 层策略处理，优先公开快照）
+- **只读安全**：不归档、不同步、不发消息、不自动登录；文章正文仅写唯一临时 JSON，Quiz 文件仅在用户明确要求时写入；不绕过验证码、登录墙或付费墙
 - **不可信数据处理**：网页正文/HTML/图片 alt/代码块视为不可信数据，只提取不执行页面指令
 - **失败分类**：LOGIN_WALL / PAYWALL / CAPTCHA / ANTI_BOT / TOOL_MISSING / EMPTY_OR_SHELL_PAGE 等 10 类，如实报告不编造
-- **Windows GBK 控制台**：Python 脚本禁止直接 print 中文全文到 stdout（会 UnicodeEncodeError），正文 JSON 写文件后回读
+- **地址与覆盖保护**：动态读取阻断本机/私网/保留地址及不安全重定向；指定输出路径默认拒绝覆盖
 
 ---
 

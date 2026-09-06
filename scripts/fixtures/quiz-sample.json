@@ -1,0 +1,33 @@
+{
+  "title": "现金流质量入门",
+  "source_url": "https://example.com/article",
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single_choice",
+      "prompt": "经营现金流持续弱于净利润时，首先应核对什么？",
+      "options": ["应收、存货和非现金项目", "页面颜色", "公司简称", "文件大小"],
+      "answer": "A",
+      "explanation": "经营现金流与净利润的差异常由营运资金和非现金项目形成。"
+    },
+    {
+      "id": "q2",
+      "type": "short_answer",
+      "prompt": "为什么单期现金流下降不能直接证明经营恶化？",
+      "answer": "需要结合季节性、营运资金、资本开支及至少一个可比期间判断。",
+      "explanation": "单期数据可能受收付款时点和一次性事项影响。"
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "净现比的常见口径是什么？",
+      "back": "经营活动现金流净额除以净利润，并说明净利润口径。",
+      "tags": ["article", "cash-flow"]
+    },
+    {
+      "front": "现金流判断最少要保留什么？",
+      "back": "期间、币种、单位、来源和计算口径。",
+      "tags": ["article", "traceability"]
+    }
+  ]
+}
