@@ -77,11 +77,22 @@ def validate_public_url(url: str, *, resolve_dns: bool = True) -> str:
     return candidate
 
 
-def classify(title: str, body_text: str, html: str) -> str:
+def classify(title: str, body_text: str, html: str, article_text: str = "") -> str:
+    """Return PASS only when a clean, continuous article body is actually extracted.
+
+    Captcha/login/paywall markers alone do NOT make a page unreadable — a page
+    can carry a captcha widget in a sidebar while the article body is fully
+    visible. Prefer the article container text; fall back to whole-body signals
+    only when no usable article block was found.
+    """
+    usable_article = len(article_text.strip()) >= 200
+    if title and usable_article:
+        # Article container has continuous content: captcha/login markers are WARN, not a block.
+        return "PASS"
     if not title or len(body_text) < 100:
         return "EMPTY_OR_SHELL_PAGE"
     lower_body = body_text.lower()
-    if any(marker in lower_body for marker in ("captcha", "verify")):
+    if any(marker in lower_body for marker in ("captcha", "verify", "byted_acrawler")):
         return "ANTI_BOT"
     if "请登录" in body_text and len(body_text) < 300:
         return "LOGIN_WALL"
@@ -182,11 +193,15 @@ def main() -> int:
                 except Exception:
                     continue
             result["article_blocks"] = blocks
+            article_text = " ".join(b["text"] for b in blocks)
 
             paragraphs = [text.strip() for text in page.locator("body p").all_inner_texts() if text.strip()]
             result["paragraphs"] = paragraphs[:100]
             result["paragraph_count"] = len(paragraphs)
-            result["status"] = classify(str(result["title"]), body_text, html)
+            result["status"] = classify(str(result["title"]), body_text, html, article_text)
+            result["article_chars"] = len(article_text)
+            if result["status"] == "PASS" and result.get("has_captcha_marker") and len(article_text) < len(body_text) * 0.3:
+                result["warn"] = "WARN_LARGE_NAV: 正文容器明显小于全页文本，可能含导航/评论/推荐污染"
 
             if result["status"] == "PASS" and len(paragraphs) < 40:
                 for _ in range(3):

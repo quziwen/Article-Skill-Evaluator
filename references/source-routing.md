@@ -1,12 +1,12 @@
 # 来源路由
 
-先按来源选择工具。只有备选路线能提供新增证据时才切换，连续两条适用路线失败后停止并报告。
+先按来源选择工具。只有备选路线能提供新增证据时才切换。Node HTTP 返回 `ANTI_BOT`、空壳或缺少动态内容时，先检查当前 Python 能否导入 Playwright（`python -c "import playwright"`），可用则运行 `python scripts/read-article-playwright.py "<url>"`；该路线也不可用时才停止并报告。真实验证码、登录墙、付费墙或权限控制按 SKILL.md 访问边界处理，不把一次 HTTP 失败当读取终局。
 
 | 来源 | 识别信号 | 首选路线 | 适用备选 | 停止条件 |
 |---|---|---|---|---|
 | 标准文章或博客 | 普通 `https://` 页面 | 网页打开/正文提取；或 `read-article.cjs` | 已安装的 Defuddle；真实浏览器 DOM | 空标题、正文只有导航或错误页 |
-| 微信公众号 | `mp.weixin.qq.com/s` | 专用只读连接器/API/CLI；或 `read-article.cjs` 的无 Cookie HTTP 提取，确认 `#js_content` | 仅在需要动态可见 DOM 时使用 Codex Browser；用户提供导出文件或正文 | 登录/环境异常、验证码、空正文、`HOST_BROWSER_POLICY` |
-| 今日头条 | `toutiao.com/article/`、`m.toutiao.com/group/`、`toutiao.com/w/` | 专用只读连接器/API/CLI；或 `read-article.cjs` 的无 Cookie HTTP 提取 | 仅在重定向、懒加载或动态可见 DOM 必需时使用 Codex Browser；正规搜索定位同一公开文章；用户提供正文 | `byted_acrawler`、App 壳、验证码、空正文、`HOST_BROWSER_POLICY` |
+| 微信公众号 | `mp.weixin.qq.com/s` | 专用只读连接器/API/CLI；或 `read-article.cjs` 的无 Cookie HTTP 提取，确认 `#js_content` | **Python Playwright（`read-article-playwright.py`，优先于 Codex Browser）**；仅在重定向、懒加载或动态可见 DOM 必需且 Python 不可用时使用 Codex Browser；用户提供导出文件或正文 | 登录墙、真实验证码、空正文、`HOST_BROWSER_POLICY` |
+| 今日头条 | `toutiao.com/article/`、`m.toutiao.com/group/`、`toutiao.com/w/` | 专用只读连接器/API/CLI；或 `read-article.cjs` 的无 Cookie HTTP 提取 | **Python Playwright（`read-article-playwright.py`，优先于 Codex Browser）**；仅在重定向、懒加载或动态可见 DOM 必需且 Python 不可用时使用 Codex Browser；正规搜索定位同一公开文章；用户提供正文 | `byted_acrawler`（触发 Python Playwright 兜底而非直接停止）、App 壳、真实验证码、空正文、`HOST_BROWSER_POLICY` |
 | 知乎 | `zhuanlan.zhihu.com/p/`、`zhihu.com/question/` | 真实浏览器可见页面 | 用户提供导出或粘贴正文 | `40362`、登录墙、验证码 |
 | CSDN/掘金/Medium | 文章路径 | 网页正文提取 | 真实浏览器 DOM | 付费墙、登录墙、正文被折叠且无法展开 |
 | GitHub 文档 | `github.com`、`raw.githubusercontent.com` | 官方仓库文件或 raw 内容 | 官方发布页 | 仓库私有或权限不足 |

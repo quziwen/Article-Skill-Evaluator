@@ -1,13 +1,14 @@
 # 浏览器执行路线
 
-仅用于专用连接器、API 或 CLI 不存在、不可用，或明确需要动态可见 DOM 的微信、头条、知乎等页面。目标是取得用户可见 DOM，不是绕过站点控制。
+路线优先级：**专用连接器/API/CLI → Python Playwright（`read-article-playwright.py`）→ Codex 桌面 Browser**。仅用于专用连接器、API 或 CLI 不存在、不可用，或明确需要动态可见 DOM 的微信、头条、知乎等页面。目标是取得用户可见 DOM，不是绕过站点控制。
 
 ## 启动前门槛
 
 1. 先查询当前会话可用的专用连接器、API 或 CLI。
 2. 本 Skill 执行器存在时先运行 `node scripts/read-article.cjs --preflight`；可用则先走非 Browser 路线。
-3. 只有前述路线不能覆盖当前操作时，才初始化 Browser/Chrome。
-4. Browser 若返回平台或宿主安全策略拒绝，将结果分类为 `HOST_BROWSER_POLICY` 并停止；不得改用 raw CDP、其他浏览器表面或间接脚本实现同一结果。
+3. Node HTTP 返回 `ANTI_BOT`、空壳或缺少动态内容时，**先检查并使用 Python Playwright**（`python -c "import playwright"` 探测，可用则运行 `python scripts/read-article-playwright.py "<url>"`）——这是首选兜底，优先于桌面 Browser。
+4. 只有 Python Playwright 不可用或明确需要用户交互时，才初始化 Codex 桌面 Browser/Chrome。
+5. Browser 若返回平台或宿主安全策略拒绝，将结果分类为 `HOST_BROWSER_POLICY` 并停止；不得改用 raw CDP、其他浏览器表面或间接脚本实现同一结果。
 
 ## Codex 桌面
 

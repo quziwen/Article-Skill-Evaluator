@@ -9,8 +9,18 @@ if [[ -z "$INPUT" ]]; then
     exit 2
 fi
 
-TEMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/article-reader-vetter.XXXXXX") || exit 2
-cleanup() { rm -rf -- "$TEMP_ROOT"; }
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P) || exit 2
+TEMP_PARENT=$(cd "${TMPDIR:-/tmp}" && pwd -P) || exit 2
+TEMP_ROOT=$(mktemp -d "$TEMP_PARENT/article-reader-vetter.XXXXXX") || exit 2
+cleanup() {
+    local resolved
+    resolved=$(cd "$TEMP_ROOT" && pwd -P) || return
+    if [[ "$(dirname "$resolved")" == "$TEMP_PARENT" && "$(basename "$resolved")" == article-reader-vetter.* ]]; then
+        rm -rf -- "$resolved"
+    else
+        echo "INCOMPLETE: refusing cleanup outside the verified temporary directory" >&2
+    fi
+}
 trap cleanup EXIT
 
 SKILL_DIR=""
@@ -58,16 +68,7 @@ else
         echo "  INCOMPLETE - scanner returned an error"
         record_incomplete "aguara returned an error"
     else
-        aguara_counts=$(printf '%s' "$aguara_json" | python3 -c 'import json,sys
-try:
- d=json.load(sys.stdin); f=d.get("findings")
- if not isinstance(f,list): raise ValueError()
- high=sum(1 for x in f if isinstance(x,dict) and isinstance(x.get("severity"),(int,float)) and x["severity"]>=4)
- medium=sum(1 for x in f if isinstance(x,dict) and isinstance(x.get("severity"),(int,float)) and 3<=x["severity"]<4)
- print(high,medium)
-except Exception:
- print("INVALID")')
-        if [[ "$aguara_counts" == "INVALID" ]]; then
+        if ! aguara_counts=$(printf '%s' "$aguara_json" | python3 "$SCRIPT_DIR/validate-output.py" aguara); then
             echo "  INCOMPLETE - unrecognized JSON"
             record_incomplete "aguara output schema was unrecognized"
         else
@@ -99,30 +100,22 @@ else
         echo "  INCOMPLETE - scanner returned an error"
         record_incomplete "skill-scanner returned an error"
     else
-        severity=$(printf '%s' "$scanner_json" | python3 -c 'import json,sys
-try:
- d=json.load(sys.stdin); s=d.get("severity")
- print(s.lower() if isinstance(s,str) else "invalid")
-except Exception:
- print("invalid")')
-        case "$severity" in
-            critical|high)
-                echo "  BLOCKED - $severity"
-                record_failure "skill-scanner reported $severity"
-                ;;
-            medium)
-                echo "  REVIEW - medium"
-                record_warning "skill-scanner reported medium"
-                ;;
-            low|none|safe|clean)
+        if ! scanner_counts=$(printf '%s' "$scanner_json" | python3 "$SCRIPT_DIR/validate-output.py" cisco); then
+            echo "  INCOMPLETE - unrecognized or incomplete scanner evidence"
+            record_incomplete "skill-scanner evidence was unrecognized or incomplete"
+        else
+            read -r high_count medium_count <<< "$scanner_counts"
+            if (( high_count > 0 )); then
+                echo "  BLOCKED - $high_count high-severity finding(s)"
+                record_failure "skill-scanner found $high_count high-severity item(s)"
+            elif (( medium_count > 0 )); then
+                echo "  REVIEW - $medium_count medium-severity finding(s)"
+                record_warning "skill-scanner found $medium_count medium-severity item(s)"
+            else
                 echo "  PASS"
-                record_pass "skill-scanner ran and reported $severity"
-                ;;
-            *)
-                echo "  INCOMPLETE - unrecognized verdict: $severity"
-                record_incomplete "skill-scanner verdict was unrecognized"
-                ;;
-        esac
+                record_pass "skill-scanner ran with no medium/high findings"
+            fi
+        fi
     fi
 fi
 
@@ -180,5 +173,5 @@ if (( WARNINGS > 0 )); then
     exit 2
 fi
 echo "VERDICT: SAFE"
-echo "All required scanners and local checks completed without findings."
+echo "All required scanners and local checks completed without medium/high findings."
 exit 0

@@ -43,9 +43,11 @@ assert.doesNotMatch(skill, /微信、头条及动态页面：优先使用 Codex 
 assert.match(skill, /工具评估与内容增强不再外转到其他技能/);
 
 const paywallPolicy = fs.readFileSync(path.join(__dirname, '..', 'references', 'enhance', 'paywall-bypass.md'), 'utf8');
-assert.match(paywallPolicy, /不得伪装 Googlebot/);
-assert.match(paywallPolicy, /不得清除 Cookie 或伪造 Referer/);
-assert.doesNotMatch(paywallPolicy, /X-Forwarded-For 伪装/);
+assert.match(paywallPolicy, /绕过付费墙读这篇/);
+assert.match(paywallPolicy, /archive\.today/);
+assert.match(paywallPolicy, /身份伪装.*仅用户明确点名/);
+assert.match(paywallPolicy, /始终不绕过/);
+assert.match(paywallPolicy, /验证码.*登录墙.*不绕过/);
 
 process.stdout.write(`${JSON.stringify({
   status: 'PASS',
@@ -55,6 +57,6 @@ process.stdout.write(`${JSON.stringify({
     'read-vs-sync-vs-integrated-assessment-routing',
     'connector-api-cli-before-browser',
     'no-direct-cannot-read',
-    'authorized-paywall-recovery-only',
+    'authorized-paywall-bypass-restored',
   ],
 }, null, 2)}\n`);
