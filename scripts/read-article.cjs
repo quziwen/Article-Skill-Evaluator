@@ -7,8 +7,10 @@ const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
 const { createRequire } = require('node:module');
+const { execFileSync } = require('node:child_process');
 
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+let outputTarget = null;
 
 function argValue(name) {
   const index = process.argv.indexOf(name);
@@ -16,7 +18,13 @@ function argValue(name) {
 }
 
 function emit(value, exitCode = 0) {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+  if (outputTarget) {
+    const payload = { ...value, runtime: { ...value.runtime, writes: 'explicit-output' }, artifact: { path: outputTarget.path, explicitlyRequested: true } };
+    fs.writeFileSync(outputTarget.path, `${JSON.stringify(payload, null, 2)}\n`, { encoding: 'utf8', flag: outputTarget.overwrite ? 'w' : 'wx' });
+    process.stdout.write(`${JSON.stringify({ status: value.status, blocker: value.blocker, title: value.result?.title, attemptedRoute: value.attemptedRoute, attempts: value.attempts, out: outputTarget.path })}\n`);
+  } else {
+    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+  }
   process.exitCode = exitCode;
 }
 
@@ -64,6 +72,83 @@ function probePlaywright() {
       message: error.message,
       attempts: error.attempts || [],
     };
+  }
+}
+
+function pythonJson(executable, script, args, timeoutMs) {
+  let stdout;
+  try {
+    stdout = execFileSync(executable, ['-B', '-X', 'utf8', path.join(__dirname, script), ...args], {
+      encoding: 'utf8', timeout: timeoutMs, maxBuffer: 12 * 1024 * 1024, windowsHide: true,
+    });
+  } catch (error) {
+    if (!error.stdout) throw error;
+    stdout = error.stdout;
+  }
+  return JSON.parse(stdout);
+}
+
+function probePythonPlaywright() {
+  const executables = process.env.ARTICLE_READER_PYTHON ? [process.env.ARTICLE_READER_PYTHON] : ['python', 'python3'];
+  const attempts = [];
+  for (const executable of executables) {
+    try {
+      const result = pythonJson(executable, 'read-article-playwright.py', ['--preflight'], 10000);
+      if (result.available) return { ...result, executable };
+      attempts.push({ executable, blocker: result.blocker || 'BROWSER_MISSING' });
+    } catch (error) {
+      attempts.push({ executable, blocker: error.code || 'TOOL_MISSING' });
+    }
+  }
+  return { available: false, blocker: 'TOOL_MISSING', attempts };
+}
+
+function shouldTryBrowser(output) {
+  return output.status === 'BLOCKED' && ['ANTI_BOT', 'CAPTCHA', 'EMPTY_OR_SHELL_PAGE', 'NETWORK_ERROR', 'DYNAMIC_RENDER_REQUIRED'].includes(output.blocker);
+}
+
+function attemptSummary(output) {
+  return { route: output.attemptedRoute, status: output.status, blocker: output.blocker,
+    title: output.result?.title || output.evidence?.title || '',
+    textCharacters: output.result?.metrics?.textCharacters || output.evidence?.textCharacters || 0 };
+}
+
+async function readArticleAuto(rawUrl, timeoutMs, adapters = {}) {
+  const originalUrl = validateUrl(rawUrl);
+  const http = await (adapters.http || readArticleHttp)(originalUrl, timeoutMs);
+  const attempts = [attemptSummary(http)];
+  if (!shouldTryBrowser(http)) return { ...http, attempts };
+  // HTTP challenge pages are preliminary observations. Navigate the original
+  // public link once; never navigate a challenge URL or solve/submit anything.
+  const browser = await (adapters.browser || readAvailableBrowser)(originalUrl, timeoutMs);
+  attempts.push(attemptSummary(browser));
+  return { ...browser, initialBlocker: http.blocker, attempts };
+}
+
+async function readAvailableBrowser(rawUrl, timeoutMs) {
+  const python = probePythonPlaywright();
+  if (python.available) {
+    let output;
+    try {
+      output = pythonJson(python.executable, 'read-article-playwright.py', [rawUrl, '--stdout', '--timeout-ms', String(timeoutMs)], timeoutMs + 30000);
+    } catch (error) {
+      return { status: 'BLOCKED', blocker: error.code === 'ETIMEDOUT' ? 'NETWORK_ERROR' : 'TOOL_ERROR', attemptedRoute: 'python-playwright-visible-dom', evidence: { error: error.code || 'INVALID_OUTPUT' } };
+    }
+    return {
+      status: output.status === 'PASS' ? 'PASS' : 'BLOCKED',
+      ...(output.status === 'PASS' ? {} : { blocker: output.status }),
+      attemptedRoute: 'python-playwright-visible-dom', source: sourceKind(rawUrl), requestedUrl: rawUrl,
+      ...(output.status === 'PASS' ? { result: { ...output.extracted, articleText: output.article_text, articleCharacters: output.article_chars, warnings: output.warn ? [output.warn] : [] } } : { evidence: { title: output.title || '', textCharacters: output.article_chars || 0, error: output.error || '' } }),
+      runtime: { python: python.executable, cookies: 'temporary-context-only', writes: 'none' },
+    };
+  }
+  if (!probePlaywright().available) return { status: 'BLOCKED', blocker: 'TOOL_MISSING', attemptedRoute: 'browser-preflight', evidence: { python }, nextAction: 'REPORT_UNAVAILABLE_BROWSER_ROUTE' };
+  const playwright = loadPlaywright();
+  const launched = await launchBrowser(playwright.module.chromium, '', false);
+  try {
+    return await readArticleBrowser(launched.browser, fs.readFileSync(path.join(__dirname, 'extract-visible-article.js'), 'utf8'), rawUrl, timeoutMs);
+  } finally {
+    await launched.browser.close();
   }
 }
 
@@ -399,8 +484,14 @@ function classifyBlocker(result, html, navigationError) {
     if (/403/i.test(title)) return 'ANTI_BOT';
     return 'EMPTY_OR_SHELL_PAGE';
   }
-  if (/[?&](?:captcha|verify)=|\/(?:captcha|verify)(?:\/|$)/i.test(observedUrl)) return 'CAPTCHA';
-  if (title && textCharacters >= 300 && (result?.blocks?.length || 0) >= 3) return '';
+  if (/wappoc_appmsgcaptcha|[?&](?:captcha|verify)=|\/(?:captcha|verify)(?:\/|$)/i.test(observedUrl)) return 'CAPTCHA';
+  const gateLead = result?.visibleGate || body.slice(0, 300);
+  if (/^(?:(?:请(?:先)?(?:完成|进行|通过)\s*)(?:安全验证|人机验证|验证码)|(?:安全验证|人机验证|验证码|完成验证)(?:$|[：:。！!，,]|后)|verify (?:you are|that you are) human|captcha(?: required| challenge|$))/i.test(gateLead)) return 'CAPTCHA';
+  if (/^(?:请(?:先)?登录|登录后(?:查看|阅读)|扫码登录|账号登录|sign in to (?:continue|read)|log in to (?:continue|read))/i.test(gateLead)) return 'LOGIN_WALL';
+  if (/^(?:订阅后|购买后|付费后|subscribe to (?:continue|read))/i.test(gateLead)) return 'PAYWALL';
+  if (/^(?:无权访问|没有权限|权限不足|访问被拒绝|access denied|permission denied)/i.test(gateLead)) return 'PERMISSION_DENIED';
+  if (result?.container?.matched === false) return 'EMPTY_OR_SHELL_PAGE';
+  if (title && textCharacters >= 80 && (result?.blocks?.length || 0) >= 1) return '';
 
   const visibleLead = `${title}\n${body.slice(0, 800)}`;
   if (/captcha|验证码|人机验证|安全验证|完成验证/i.test(visibleLead)) return 'CAPTCHA';
@@ -582,8 +673,8 @@ async function readArticleHttp(rawUrl, timeoutMs) {
       source: sourceKind(fetched.observedUrl),
       requestedUrl: validateUrl(rawUrl),
       observedUrl: fetched.observedUrl,
-      nextAction: ['EMPTY_OR_SHELL_PAGE', 'NETWORK_ERROR'].includes(blocker)
-        ? 'DYNAMIC_RENDER_REQUIRED'
+      nextAction: ['ANTI_BOT', 'CAPTCHA', 'EMPTY_OR_SHELL_PAGE', 'NETWORK_ERROR'].includes(blocker)
+        ? 'TRY_BROWSER_ON_ORIGINAL_URL'
         : 'STOP_AND_REPORT',
       evidence: {
         httpStatus: fetched.status,
@@ -609,8 +700,12 @@ async function readArticleBrowser(browser, extractorSource, rawUrl, timeoutMs) {
     try {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
       await page.waitForTimeout(1200);
-      await expandKnownControls(page);
-      await scrollForLazyContent(page);
+      const initial = await extractPage(page, extractorSource);
+      const initialBlocker = classifyBlocker(initial, '', '');
+      if (!['CAPTCHA', 'LOGIN_WALL', 'PAYWALL', 'PERMISSION_DENIED', 'HOST_BROWSER_POLICY'].includes(initialBlocker)) {
+        await expandKnownControls(page);
+        await scrollForLazyContent(page);
+      }
     } catch (error) {
       navigationError = error.message;
     }
@@ -654,9 +749,9 @@ async function readArticleBrowser(browser, extractorSource, rawUrl, timeoutMs) {
 async function main() {
   if (process.argv.includes('--help')) {
     console.log('Usage: node scripts/read-article.cjs --preflight');
-    console.log('       node scripts/read-article.cjs --url <url> [--mode http|browser] [--headed] [--channel chrome|msedge] [--timeout-ms 45000]');
+    console.log('       node scripts/read-article.cjs --url <url> [--mode auto|http|browser] [--out file] [--overwrite] [--timeout-ms 45000]');
     console.log('       node scripts/read-article.cjs --self-test');
-    console.log('Outputs JSON to stdout only. Does not save, archive, authenticate, or bypass verification.');
+    console.log('Default auto: HTTP then at most one visible-DOM attempt. Stdout only unless --out is explicit.');
     return;
   }
 
@@ -668,19 +763,29 @@ async function main() {
   }
   const timeoutMs = Math.max(5000, Math.min(120000, Number(argValue('--timeout-ms') || 45000)));
   const requestedChannel = argValue('--channel');
-  const requestedMode = argValue('--mode') || 'http';
-  if (!['http', 'browser'].includes(requestedMode)) {
-    throw Object.assign(new Error('--mode must be http or browser'), { code: 'UNSUPPORTED_FORMAT' });
+  const requestedMode = argValue('--mode') || 'auto';
+  if (!['auto', 'http', 'browser'].includes(requestedMode)) {
+    throw Object.assign(new Error('--mode must be auto, http or browser'), { code: 'UNSUPPORTED_FORMAT' });
   }
   if (requestedChannel && !['chrome', 'msedge'].includes(requestedChannel)) {
     throw Object.assign(new Error('--channel must be chrome or msedge'), { code: 'UNSUPPORTED_FORMAT' });
+  }
+  const requestedOut = argValue('--out');
+  if (process.argv.includes('--overwrite') && !requestedOut) throw Object.assign(new Error('--overwrite requires --out'), { code: 'INVALID_INPUT' });
+  if (process.argv.includes('--out') && (!requestedOut || requestedOut.startsWith('--'))) throw Object.assign(new Error('--out requires a file path'), { code: 'INVALID_INPUT' });
+  if (requestedOut) {
+    const target = path.resolve(requestedOut);
+    const overwrite = process.argv.includes('--overwrite');
+    if (!fs.statSync(path.dirname(target)).isDirectory()) throw Object.assign(new Error('Output parent must exist'), { code: 'INVALID_INPUT' });
+    if (fs.existsSync(target) && !overwrite) throw Object.assign(new Error('Output exists; explicit --overwrite is required'), { code: 'OUTPUT_EXISTS' });
+    outputTarget = { path: target, overwrite };
   }
 
   const playwrightProbe = probePlaywright();
   if (preflightMode) {
     emit({
       status: 'PASS',
-      defaultRoute: 'http-public-html',
+      defaultRoute: 'auto-http-then-visible-dom',
       routes: {
         httpPublicHtml: {
           available: typeof fetch === 'function',
@@ -689,6 +794,7 @@ async function main() {
           writes: 'none',
         },
         playwrightVisibleDom: playwrightProbe,
+        pythonPlaywrightVisibleDom: probePythonPlaywright(),
       },
       policy: {
         browserOrder: 'after-purpose-built-connector-api-cli',
@@ -707,7 +813,10 @@ async function main() {
       reason: 'Playwright unavailable; HTTP parser and routing fixtures still passed.',
       probe: playwrightProbe,
     };
-    if (playwrightProbe.available) {
+    const pythonProbe = probePythonPlaywright();
+    if (pythonProbe.available) {
+      browserOutput = pythonJson(pythonProbe.executable, 'test-reader-behavior.py', ['--json'], 90000);
+    } else if (playwrightProbe.available) {
       const playwright = loadPlaywright();
       const launched = await launchBrowser(playwright.module.chromium, requestedChannel, process.argv.includes('--headed'));
       try {
@@ -717,15 +826,22 @@ async function main() {
       }
     }
     emit({
-      status: 'PASS',
+      status: browserOutput.status === 'PASS' ? 'PASS' : browserOutput.status === 'SKIPPED' ? 'PARTIAL' : 'FAIL',
       mode: 'deterministic-fixtures',
       http: httpOutput,
       browser: browserOutput,
       runtime: {
         playwright: playwrightProbe,
+        pythonPlaywright: pythonProbe,
         writes: 'none',
       },
-    });
+    }, browserOutput.status === 'PASS' ? 0 : 2);
+    return;
+  }
+
+  if (requestedMode === 'auto') {
+    const output = await readArticleAuto(rawUrl, timeoutMs);
+    emit(output, output.status === 'PASS' ? 0 : 2);
     return;
   }
 
@@ -740,6 +856,12 @@ async function main() {
         writes: 'none',
       },
     }, output.status === 'BLOCKED' ? 2 : 0);
+    return;
+  }
+
+  if (!requestedChannel && !process.argv.includes('--headed')) {
+    const output = await readAvailableBrowser(validateUrl(rawUrl), timeoutMs);
+    emit(output, output.status === 'PASS' ? 0 : 2);
     return;
   }
 
@@ -760,7 +882,11 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+module.exports = { readArticleAuto, shouldTryBrowser, classifyBlocker, probePythonPlaywright };
+
+if (require.main === module) main().catch((error) => {
+  // A failed output write must not retry the same write from the error handler.
+  outputTarget = null;
   emit({
     status: 'ERROR',
     blocker: error.code || 'TOOL_ERROR',

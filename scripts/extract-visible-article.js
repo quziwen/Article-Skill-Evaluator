@@ -1,12 +1,12 @@
 (() => {
   const selectors = [
     '#js_content', '#article-content', 'article',
-    '[class*="article"]', '[class*="content"]', '[class*="post"]',
     '.rich_media_content', '.article-content', '.post-content',
     '.entry-content', '.story-body', '#content', '.content-body',
     '.article-body', '[class*="story"]', 'main',
     '#page-content', '.text-content', '#read-content',
-    '.detail-content', '.main-content', '.page-content'
+    '.detail-content', '.main-content', '.page-content',
+    '[class*="article"]', '[class*="content"]', '[class*="post"]'
   ];
 
   const clean = (value) => (value || '').replace(/\s+/g, ' ').trim();
@@ -16,23 +16,14 @@
   };
 
   let container = null;
+  let containerSelector = '';
   for (const selector of selectors) {
     const el = document.querySelector(selector);
-    if (el && clean(el.innerText).length > 100) {
+    if (el && el.getClientRects().length && !el.closest('[hidden], [aria-hidden="true"], [inert], nav, aside, footer') && clean(el.innerText).length >= 80) {
       container = el;
+      containerSelector = selector;
       break;
     }
-  }
-
-  if (!container) {
-    let maxLen = 0;
-    document.querySelectorAll('div, section').forEach((el) => {
-      const len = clean(el.innerText).length;
-      if (len > maxLen && len > 300) {
-        maxLen = len;
-        container = el;
-      }
-    });
   }
   if (!container) container = document.body;
 
@@ -77,12 +68,14 @@
     { value: document.title, source: 'document_title' },
   ]);
   const authorMetadata = chooseMetadata([
+    { value: document.querySelector('#js_name')?.innerText, source: 'wechat_author' },
     { value: document.querySelector('meta[name="author"]')?.content, source: 'meta_author' },
     { value: jsonLdAuthor, source: 'json_ld' },
     { value: document.querySelector('[class*="author"]')?.innerText, source: 'dom_author' },
     { value: document.querySelector('[class*="writer"]')?.innerText, source: 'dom_writer' },
   ]);
   const publishTimeMetadata = chooseMetadata([
+    { value: document.querySelector('#publish_time')?.innerText, source: 'wechat_publish_time' },
     { value: document.querySelector('meta[property="article:published_time"]')?.content, source: 'meta_published_time' },
     { value: jsonLdArticle.datePublished, source: 'json_ld' },
     { value: document.querySelector('time')?.getAttribute('datetime'), source: 'time_datetime' },
@@ -216,8 +209,11 @@
       recordExclusion(reason);
       continue;
     }
-    markSeen(node);
     const tag = node.tagName.toLowerCase();
+    // A blockquote/list item can contain paragraphs. Emit that text only once;
+    // keep separately typed images and tables even when embedded in a text node.
+    if (!['img', 'figure', 'table'].includes(tag) && seenNodes.some((parent) => parent !== node && parent.contains(node))) continue;
+    markSeen(node);
     if (tag === 'img') {
       pushImage(node);
       continue;
@@ -231,7 +227,10 @@
         else pushImage(img);
       }
       const caption = clean(node.querySelector('figcaption')?.innerText);
-      if (caption) blocks.push({ type: 'text', tag: 'figcaption', text: caption, links: [] });
+      if (caption) {
+        markSeen(node.querySelector('figcaption'));
+        blocks.push({ type: 'text', tag: 'figcaption', text: caption, links: [] });
+      }
       continue;
     }
     if (tag === 'table') {
@@ -256,6 +255,11 @@
     title: titleMetadata.value.replace(/\s*[-–—|]\s*(今日头条|微信公众号|知乎|百家号|网易新闻|搜狐|新浪财经|腾讯新闻|36氪|虎嗅|澎湃新闻)\s*$/, ''),
     author: authorMetadata.value,
     publishTime: publishTimeMetadata.value,
+    container: { selector: containerSelector || 'body', matched: Boolean(containerSelector) },
+    visibleGate: Array.from(document.querySelectorAll('[role="dialog"], form'))
+      .filter((node) => node.getClientRects().length && !node.closest('[hidden], [aria-hidden="true"], [inert]') && window.getComputedStyle(node).visibility !== 'hidden' && window.getComputedStyle(node).opacity !== '0')
+      .map((node) => clean(node.innerText))
+      .find((text) => /^(?:请(?:先)?(?:完成|进行|通过)?(?:安全验证|人机验证|登录)|账号登录|登录后|订阅后|购买后|付费后|权限不足|无权访问|访问被拒绝|verify (?:you are|that you are) human|(?:sign|log) in to (?:continue|read)|subscribe to (?:continue|read)|access denied|permission denied)/i.test(text)) || '',
     metadata: {
       titleSource: titleMetadata.source,
       authorSource: authorMetadata.source,

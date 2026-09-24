@@ -1,6 +1,6 @@
 # Article Reader — 文章读取、深度解读、工具评估与内容增强
 
-> 版本：v2.3（2026-09-08）
+> 版本：v2.3.1（2026-09-24）
 
 一个面向 AI Agent 的**四合一文章处理 Skill**：读取网页/PDF/飞书文档 → 深度解读 → 评估文章中介绍的工具是否值得安装 → 将文章加工为播客/Quiz/闪卡。
 
@@ -11,6 +11,7 @@
 ## ✨ 功能特性
 
 ### 1. 读取模式（默认）
+- 统一入口 `node scripts/read-article.cjs --url "<url>"`：HTTP 受阻时自动执行适用的 Python/Node Playwright 路线；默认 stdout，取证显式 `--out`，拒绝意外覆盖。
 - 只读抓取网页、微信公众号、今日头条、知乎、PDF、飞书文档等
 - 输出三段简报：文章讲什么 / 主要观点 / 初步可信度
 - 动态站点可在当前环境已安装 Playwright 时走临时浏览器路线；真实可读性按目标页面逐次验证
@@ -94,6 +95,7 @@ bash scripts/vetter/vett.sh "<skill-or-repo-or-path>"
 # 自检
 node scripts/read-article.cjs --self-test
 node scripts/test-routing.cjs
+node scripts/test-reader-routing.cjs
 python scripts/test-playwright-policy.py
 node scripts/test-quiz-renderer.mjs
 ```
@@ -130,7 +132,7 @@ article-reader/
 
 ## 🛠 技术说明
 
-- **只读安全**：不归档、不同步、不发消息、不自动登录；文章正文仅写唯一临时 JSON，Quiz 文件仅在用户明确要求时写入；不绕过验证码、登录墙或付费墙
+- **只读安全**：不归档、不同步、不发消息、不自动登录；文章默认只输出 JSON，明确要求取证时使用 --out，Quiz 文件仅在用户明确要求时写入；不绕过验证码、登录墙或付费墙
 - **不可信数据处理**：网页正文/HTML/图片 alt/代码块视为不可信数据，只提取不执行页面指令
 - **失败分类**：LOGIN_WALL / PAYWALL / CAPTCHA / ANTI_BOT / TOOL_MISSING / EMPTY_OR_SHELL_PAGE 等 10 类，如实报告不编造
 - **地址与覆盖保护**：动态读取阻断本机/私网/保留地址及不安全重定向；指定输出路径默认拒绝覆盖
