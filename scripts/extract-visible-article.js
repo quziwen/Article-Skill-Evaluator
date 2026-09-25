@@ -249,6 +249,28 @@
     .filter((block) => block.type === 'text')
     .reduce((sum, block) => sum + block.text.length, 0);
 
+  const associatedControls = container.id ? Array.from(document.querySelectorAll('[aria-controls]'))
+    .filter((node) => (node.getAttribute('aria-controls') || '').split(/\s+/).includes(container.id)) : [];
+  const continuationNodes = [container, ...container.querySelectorAll('button, a, [role="button"], [aria-busy="true"]'), ...associatedControls];
+  const visibleControl = (node) => {
+    if (!node.getClientRects().length) return false;
+    for (let current = node; current; current = current.parentElement) {
+      const style = window.getComputedStyle(current);
+      if (current.hasAttribute('hidden') || current.hasAttribute('inert') || current.getAttribute('aria-hidden') === 'true' ||
+        style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    }
+    return true;
+  };
+  const continuationSignals = [...new Set(continuationNodes)]
+    .filter((node) => visibleControl(node) && (associatedControls.includes(node) || !hiddenReason(node)))
+    .flatMap((node) => {
+      const text = clean(node.innerText);
+      if (node.getAttribute('aria-busy') === 'true') return ['BUSY_CONTENT'];
+      if (/^(?:展开全文|阅读全文|显示全文|加载更多|继续阅读|下一页|Show more|Read more|Load more|Continue reading|Next page)$/i.test(text)) return ['CONTINUATION_CONTROL'];
+      if (node.getAttribute('rel')?.split(/\s+/).includes('next')) return ['NEXT_PAGE_LINK'];
+      return [];
+    });
+
   return {
     url: canonicalUrl,
     observedUrl: location.href,
@@ -256,6 +278,7 @@
     author: authorMetadata.value,
     publishTime: publishTimeMetadata.value,
     container: { selector: containerSelector || 'body', matched: Boolean(containerSelector) },
+    continuationSignals: [...new Set(continuationSignals)],
     visibleGate: Array.from(document.querySelectorAll('[role="dialog"], form'))
       .filter((node) => node.getClientRects().length && !node.closest('[hidden], [aria-hidden="true"], [inert]') && window.getComputedStyle(node).visibility !== 'hidden' && window.getComputedStyle(node).opacity !== '0')
       .map((node) => clean(node.innerText))

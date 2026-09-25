@@ -78,6 +78,101 @@ class VisibleDOM(unittest.TestCase):
         finally:
             page.close()
 
+    def collect_html(self, html, **limits):
+        page = self.context.new_page()
+        try:
+            page.set_viewport_size({"width": 900, "height": 600})
+            page.set_content(html)
+            page.evaluate("window.__testClicks = 0; document.addEventListener('click', () => window.__testClicks++);")
+            result = READER.collect_visible_page(page, waitMs=80, **limits)
+            result["test_click_count"] = page.evaluate("window.__testClicks")
+            return result
+        finally:
+            page.close()
+
+    def test_delayed_dynamic_article_is_waited_for(self):
+        html = '<title>动态正文</title><main id="mount">加载中</main><script>setTimeout(() => { document.querySelector("#mount").innerHTML = ' + json.dumps(f'<article><p>{ARTICLE}</p><p>DYNAMIC_END</p></article>') + '; }, 100);</script>'
+        result = self.collect_html(html)
+        self.assertEqual("PASS", result["status"])
+        self.assertIn("DYNAMIC_END", result["article_text"])
+        self.assertTrue(result["completeness"]["contentGrew"])
+        self.assertEqual("STABLE_BOTTOM", result["completeness"]["stopReason"])
+        self.assertFalse(result["completeness"]["fullTextVerified"])
+
+    def lazy_html(self, batches):
+        return '<title>滚动加载正文</title><style>article p { min-height: 650px; }</style><article><p>' + ARTICLE + '</p></article><script>let batches = 0; window.addEventListener("scroll", () => { if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 30 && batches < ' + str(batches) + ') { batches++; const p = document.createElement("p"); p.textContent = ' + json.dumps(ARTICLE) + ' + " APPENDED_" + batches; document.querySelector("article").appendChild(p); } });</script>'
+
+    def test_long_article_scrolls_until_stable_and_keeps_order(self):
+        result = self.collect_html(self.lazy_html(3))
+        self.assertEqual("PASS", result["status"])
+        self.assertEqual(4, result["paragraph_count"])
+        self.assertTrue(result["article_text"].endswith("APPENDED_3"))
+        self.assertLess(result["article_text"].index("APPENDED_1"), result["article_text"].index("APPENDED_2"))
+        self.assertEqual("STABLE_BOTTOM", result["completeness"]["stopReason"])
+        self.assertTrue(result["completeness"]["contentGrew"])
+
+    def test_infinite_article_stops_at_scroll_limit_and_reports_partial(self):
+        result = self.collect_html(self.lazy_html(100), maxScrolls=4)
+        self.assertEqual("PASS", result["status"])
+        self.assertEqual("partial", result["completeness"]["status"])
+        self.assertEqual("SCROLL_LIMIT", result["completeness"]["stopReason"])
+        self.assertEqual(4, result["completeness"]["scrolls"])
+        self.assertFalse(result["completeness"]["fullTextVerified"])
+
+    def test_time_limit_is_recorded_without_claiming_completion(self):
+        result = self.collect_html(self.lazy_html(100), maxElapsedMs=60)
+        self.assertEqual("TIME_LIMIT", result["completeness"]["stopReason"])
+        self.assertLessEqual(result["completeness"]["scrolls"], 1)
+        self.assertEqual("partial", result["completeness"]["status"])
+
+    def test_captcha_page_is_not_scrolled_or_read_as_article(self):
+        result = self.collect_html('<title>安全验证</title><form>请完成人机验证后继续阅读</form><article><p>' + ARTICLE + '</p></article>')
+        self.assertEqual("CAPTCHA", result["status"])
+        self.assertEqual("VISIBLE_GATE", result["completeness"]["stopReason"])
+        self.assertEqual(0, result["completeness"]["scrolls"])
+
+    def test_continuation_control_is_reported_without_clicking(self):
+        result = self.collect_html('<title>部分正文</title><article><p>' + ARTICLE + '</p><button onclick="document.body.innerHTML = \'UNWANTED_ACTION\'">阅读全文</button></article>')
+        self.assertEqual("PASS", result["status"])
+        self.assertEqual("CONTINUATION_PRESENT", result["completeness"]["stopReason"])
+        self.assertEqual("partial", result["completeness"]["status"])
+        self.assertNotIn("UNWANTED_ACTION", result["article_text"])
+
+    def test_unrendered_shell_is_bounded_and_never_complete(self):
+        result = self.collect_html('<title>加载页面</title><div>加载中</div>', maxScrolls=3)
+        self.assertEqual("EMPTY_OR_SHELL_PAGE", result["status"])
+        self.assertEqual("unknown", result["completeness"]["status"])
+        self.assertEqual("SCROLL_LIMIT", result["completeness"]["stopReason"])
+        self.assertEqual(3, result["completeness"]["scrolls"])
+
+    def test_root_busy_and_associated_controls_remain_partial(self):
+        for attributes, inside, outside, expected_signal in [
+            ('aria-busy="true"', '', '', 'BUSY_CONTENT'),
+            ('', '<div aria-busy="true">仍在加载</div>', '', 'BUSY_CONTENT'),
+            ('', '<div role="button">Read more</div>', '', 'CONTINUATION_CONTROL'),
+            ('', '', '<button aria-controls="other story">Read more</button>', 'CONTINUATION_CONTROL'),
+        ]:
+            with self.subTest(attributes=attributes, inside=inside, outside=outside):
+                result = self.collect_html(f'<title>部分正文</title><article id="story" {attributes}><p>{ARTICLE}</p>{inside}</article>{outside}')
+                self.assertEqual("PASS", result["status"])
+                self.assertIn(expected_signal, result["extracted"]["continuationSignals"])
+                self.assertEqual("partial", result["completeness"]["status"])
+                self.assertEqual("CONTINUATION_PRESENT", result["completeness"]["stopReason"])
+                self.assertEqual(0, result["test_click_count"])
+
+    def test_unrelated_or_hidden_external_controls_do_not_make_article_partial(self):
+        for outside in [
+            '<aside><button>Read more</button></aside>',
+            '<button aria-controls="other">Read more</button>',
+            '<button aria-controls="story" style="display:none">Read more</button>',
+            '<div hidden><button aria-controls="story">Read more</button></div>',
+        ]:
+            with self.subTest(outside=outside):
+                result = self.collect_html(f'<title>可见正文</title><article id="story"><p>{ARTICLE}</p></article>{outside}')
+                self.assertEqual([], result["extracted"]["continuationSignals"])
+                self.assertEqual("observed-stable", result["completeness"]["status"])
+                self.assertEqual(0, result["test_click_count"])
+
     def test_wechat_container_metadata_and_order(self):
         result = self.read_html((ROOT / "fixtures/wechat.html").read_text(encoding="utf-8"))
         self.assertEqual("PASS", result["status"])

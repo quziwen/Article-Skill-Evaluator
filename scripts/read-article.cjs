@@ -11,6 +11,17 @@ const { execFileSync } = require('node:child_process');
 
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 let outputTarget = null;
+const addressPolicy = JSON.parse(fs.readFileSync(path.join(__dirname, 'public-address-policy.json'), 'utf8'));
+const addressLists = Object.fromEntries(['ipv4', 'ipv6'].map((family) => [family,
+  Object.fromEntries(['blocked', 'exceptions'].map((kind) => {
+    const list = new net.BlockList();
+    for (const cidr of addressPolicy[family][kind]) {
+      const [address, prefix] = cidr.split('/');
+      list.addSubnet(address, Number(prefix), family);
+    }
+    return [kind, list];
+  }))
+]));
 
 function argValue(name) {
   const index = process.argv.indexOf(name);
@@ -104,13 +115,15 @@ function probePythonPlaywright() {
 }
 
 function shouldTryBrowser(output) {
-  return output.status === 'BLOCKED' && ['ANTI_BOT', 'CAPTCHA', 'EMPTY_OR_SHELL_PAGE', 'NETWORK_ERROR', 'DYNAMIC_RENDER_REQUIRED'].includes(output.blocker);
+  return (output.status === 'PASS' && output.result?.completeness?.status === 'partial') ||
+    (output.status === 'BLOCKED' && ['ANTI_BOT', 'CAPTCHA', 'EMPTY_OR_SHELL_PAGE', 'NETWORK_ERROR', 'DYNAMIC_RENDER_REQUIRED'].includes(output.blocker));
 }
 
 function attemptSummary(output) {
   return { route: output.attemptedRoute, status: output.status, blocker: output.blocker,
     title: output.result?.title || output.evidence?.title || '',
-    textCharacters: output.result?.metrics?.textCharacters || output.evidence?.textCharacters || 0 };
+    textCharacters: output.result?.metrics?.textCharacters || output.evidence?.textCharacters || 0,
+    completeness: output.result?.completeness || output.evidence?.completeness };
 }
 
 async function readArticleAuto(rawUrl, timeoutMs, adapters = {}) {
@@ -122,57 +135,66 @@ async function readArticleAuto(rawUrl, timeoutMs, adapters = {}) {
   // public link once; never navigate a challenge URL or solve/submit anything.
   const browser = await (adapters.browser || readAvailableBrowser)(originalUrl, timeoutMs);
   attempts.push(attemptSummary(browser));
-  return { ...browser, initialBlocker: http.blocker, attempts };
+  return { ...browser, initialBlocker: http.blocker || 'PARTIAL_HTTP_CONTENT', attempts,
+    ...(http.status === 'PASS' && browser.status !== 'PASS' ? { partialResult: http.result } : {}) };
 }
 
-async function readAvailableBrowser(rawUrl, timeoutMs) {
-  const python = probePythonPlaywright();
+async function readAvailableBrowser(rawUrl, timeoutMs, adapters = {}) {
+  const python = (adapters.probePython || probePythonPlaywright)();
+  let pythonFailure;
   if (python.available) {
     let output;
     try {
-      output = pythonJson(python.executable, 'read-article-playwright.py', [rawUrl, '--stdout', '--timeout-ms', String(timeoutMs)], timeoutMs + 30000);
+      output = (adapters.pythonJson || pythonJson)(python.executable, 'read-article-playwright.py', [rawUrl, '--stdout', '--timeout-ms', String(timeoutMs)], timeoutMs + 30000);
     } catch (error) {
-      return { status: 'BLOCKED', blocker: error.code === 'ETIMEDOUT' ? 'NETWORK_ERROR' : 'TOOL_ERROR', attemptedRoute: 'python-playwright-visible-dom', evidence: { error: error.code || 'INVALID_OUTPUT' } };
+      output = { status: error.code === 'ETIMEDOUT' ? 'NETWORK_ERROR' : 'TOOL_ERROR', error: error.code || 'INVALID_OUTPUT' };
     }
-    return {
+    const result = {
       status: output.status === 'PASS' ? 'PASS' : 'BLOCKED',
       ...(output.status === 'PASS' ? {} : { blocker: output.status }),
       attemptedRoute: 'python-playwright-visible-dom', source: sourceKind(rawUrl), requestedUrl: rawUrl,
-      ...(output.status === 'PASS' ? { result: { ...output.extracted, articleText: output.article_text, articleCharacters: output.article_chars, warnings: output.warn ? [output.warn] : [] } } : { evidence: { title: output.title || '', textCharacters: output.article_chars || 0, error: output.error || '' } }),
+      ...(output.status === 'PASS' ? { result: { ...output.extracted, articleText: output.article_text, articleCharacters: output.article_chars, completeness: output.completeness, warnings: output.warn ? [output.warn] : [] } } : { evidence: { title: output.title || '', textCharacters: output.article_chars || 0, error: output.error || '', completeness: output.completeness } }),
       runtime: { python: python.executable, cookies: 'temporary-context-only', writes: 'none' },
     };
+    // A broken runtime is not evidence that a page is unreadable. Try the other
+    // installed runtime once; an actual gate or page result must not be retried.
+    if (!['TOOL_ERROR', 'TOOL_MISSING', 'BROWSER_MISSING'].includes(output.status)) return result;
+    pythonFailure = result;
   }
-  if (!probePlaywright().available) return { status: 'BLOCKED', blocker: 'TOOL_MISSING', attemptedRoute: 'browser-preflight', evidence: { python }, nextAction: 'REPORT_UNAVAILABLE_BROWSER_ROUTE' };
-  const playwright = loadPlaywright();
-  const launched = await launchBrowser(playwright.module.chromium, '', false);
+  if (!(adapters.probeNode || probePlaywright)().available) return pythonFailure || { status: 'BLOCKED', blocker: 'TOOL_MISSING', attemptedRoute: 'browser-preflight', evidence: { python }, nextAction: 'REPORT_UNAVAILABLE_BROWSER_ROUTE' };
+  const readNode = adapters.readNode || (async () => {
+    const playwright = loadPlaywright();
+    const launched = await launchBrowser(playwright.module.chromium, '', false);
+    try {
+      return await readArticleBrowser(launched.browser, fs.readFileSync(path.join(__dirname, 'extract-visible-article.js'), 'utf8'), rawUrl, timeoutMs);
+    } finally { await launched.browser.close(); }
+  });
+  let result;
   try {
-    return await readArticleBrowser(launched.browser, fs.readFileSync(path.join(__dirname, 'extract-visible-article.js'), 'utf8'), rawUrl, timeoutMs);
-  } finally {
-    await launched.browser.close();
+    result = await readNode(rawUrl, timeoutMs);
+  } catch (error) {
+    result = { status: 'BLOCKED', blocker: error.code || 'TOOL_ERROR', attemptedRoute: 'playwright-visible-dom', evidence: { error: error.message } };
   }
+  return pythonFailure ? { ...result, runtimeAttempts: [attemptSummary(pythonFailure), attemptSummary(result)] } : result;
 }
 
 function isPrivateLiteral(hostname) {
-  let value = hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  if (value.startsWith('::ffff:')) value = value.slice(7);
+  const value = hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
   if (value === 'localhost' || value.endsWith('.localhost') || value.endsWith('.local')) return true;
   const version = net.isIP(value);
-  if (version === 4) {
-    const parts = value.split('.').map(Number);
-    return parts[0] === 10 ||
-      parts[0] === 127 ||
-      parts[0] === 0 ||
-      parts[0] >= 224 ||
-      (parts[0] === 169 && parts[1] === 254) ||
-      (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
-      (parts[0] === 192 && parts[1] === 168) ||
-      (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) ||
-      (parts[0] === 198 && parts[1] >= 18 && parts[1] <= 19);
-  }
   if (version === 6) {
-    return value === '::1' || value.startsWith('fc') || value.startsWith('fd') || value.startsWith('fe80:');
+    if (value.includes('%')) return true;
+    // URL canonicalization handles dotted and expanded IPv4-mapped spellings.
+    const canonical = new URL(`http://[${value}]/`).hostname.slice(1, -1);
+    const mapped = /^::ffff:([\da-f]+):([\da-f]+)$/i.exec(canonical);
+    if (mapped) {
+      const high = Number.parseInt(mapped[1], 16), low = Number.parseInt(mapped[2], 16);
+      return isPrivateLiteral([high >>> 8, high & 255, low >>> 8, low & 255].join('.'));
+    }
   }
-  return false;
+  if (!version) return false;
+  const family = version === 4 ? 'ipv4' : 'ipv6';
+  return !addressLists[family].exceptions.check(value, family) && addressLists[family].blocked.check(value, family);
 }
 
 function validateUrl(raw) {
@@ -190,7 +212,7 @@ function validateUrl(raw) {
     throw error;
   }
   if (isPrivateLiteral(value.hostname)) {
-    const error = new Error('Private, loopback, and local hosts are blocked by the read-only crawler');
+    const error = new Error('Private, local, reserved and multicast destinations are blocked by the read-only crawler');
     error.code = 'PERMISSION_DENIED';
     throw error;
   }
@@ -201,13 +223,14 @@ async function validatePublicTarget(raw) {
   const url = validateUrl(raw);
   let addresses;
   try {
-    addresses = await dns.lookup(new URL(url).hostname, { all: true, verbatim: true });
+    const hostname = new URL(url).hostname.replace(/^\[|\]$/g, '');
+    addresses = net.isIP(hostname) ? [{ address: hostname }] : await dns.lookup(hostname, { all: true, verbatim: true });
   } catch (error) {
     const wrapped = new Error(`DNS lookup failed: ${error.message}`);
     wrapped.code = 'NETWORK_ERROR';
     throw wrapped;
   }
-  if (!addresses.length || addresses.some((entry) => isPrivateLiteral(entry.address))) {
+  if (!addresses.length || addresses.some((entry) => !net.isIP(entry.address) || isPrivateLiteral(entry.address))) {
     const error = new Error('The target resolves to a private, loopback, local, or reserved address');
     error.code = 'PERMISSION_DENIED';
     throw error;
@@ -262,7 +285,7 @@ function decodeEntities(value) {
 
 function stripDangerousAndHidden(html) {
   let value = String(html || '');
-  value = value.replace(/<(script|style|noscript|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '');
+  value = value.replace(/<(script|style|noscript|template|nav|aside|footer)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '');
   value = value.replace(
     /<([a-z][\w:-]*)\b(?=[^>]*(?:\bhidden\b|\baria-hidden\s*=\s*["']?true|\bstyle\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)))[^>]*>[\s\S]*?<\/\1\s*>/gi,
     '',
@@ -270,7 +293,7 @@ function stripDangerousAndHidden(html) {
   return value;
 }
 
-function findElementById(html, id) {
+function findElementById(html, id, includeWrapper = false) {
   const escapedId = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const opening = new RegExp(
     `<([a-z][\\w:-]*)\\b[^>]*\\bid\\s*=\\s*(?:"${escapedId}"|'${escapedId}')[^>]*>`,
@@ -286,12 +309,12 @@ function findElementById(html, id) {
   while ((token = tagPattern.exec(html))) {
     if (/^<\//.test(token[0])) depth -= 1;
     else if (!/\/>$/.test(token[0])) depth += 1;
-    if (depth === 0) return html.slice(contentStart, token.index);
+    if (depth === 0) return includeWrapper ? html.slice(opening.index, tagPattern.lastIndex) : html.slice(contentStart, token.index);
   }
-  return html.slice(contentStart);
+  return html.slice(includeWrapper ? opening.index : contentStart);
 }
 
-function findFirstTag(html, tagName) {
+function findFirstTag(html, tagName, includeWrapper = false) {
   const opening = new RegExp(`<${tagName}\\b[^>]*>`, 'i').exec(html);
   if (!opening) return '';
   const contentStart = opening.index + opening[0].length;
@@ -302,7 +325,7 @@ function findFirstTag(html, tagName) {
   while ((token = tagPattern.exec(html))) {
     if (/^<\//.test(token[0])) depth -= 1;
     else if (!/\/>$/.test(token[0])) depth += 1;
-    if (depth === 0) return html.slice(contentStart, token.index);
+    if (depth === 0) return includeWrapper ? html.slice(opening.index, tagPattern.lastIndex) : html.slice(contentStart, token.index);
   }
   return '';
 }
@@ -341,23 +364,43 @@ function safeVisibleText(fragment) {
 }
 
 function findArticleContainer(html) {
-  const wechat = findElementById(html, 'js_content');
-  if (wechat) return wechat;
-  const article = findFirstTag(html, 'article');
-  if (article) return article;
-  const main = findFirstTag(html, 'main');
-  if (main) return main;
+  const wechat = findElementById(html, 'js_content', true);
+  if (wechat) return { html: wechat, selector: '#js_content' };
+  const article = findFirstTag(html, 'article', true);
+  if (article) return { html: article, selector: 'article' };
+  const main = findFirstTag(html, 'main', true);
+  if (main) return { html: main, selector: 'main' };
   const classMatch = /<([a-z][\w:-]*)\b[^>]*\bclass\s*=\s*["'][^"']*(?:article-content|post-content|entry-content|rich_media_content)[^"']*["'][^>]*>/i.exec(html);
   if (classMatch) {
     const synthetic = `${classMatch[0].replace(/>$/, ' id="__article_reader_candidate">')}${html.slice(classMatch.index + classMatch[0].length)}`;
-    return findElementById(synthetic, '__article_reader_candidate');
+    return { html: findElementById(synthetic, '__article_reader_candidate', true), selector: 'article-content-class', openingTag: classMatch[0] };
   }
-  return findFirstTag(html, 'body');
+  return { html: findFirstTag(html, 'body', true), selector: '' };
+}
+
+function htmlContinuationSignals(container, source, containerId) {
+  const signals = [];
+  const inspect = (html, associatedOnly = false) => {
+    for (const match of html.matchAll(/<([a-z][\w:-]*)\b[^>]*>/gi)) {
+      const opening = match[0];
+      const associated = containerId && decodeEntities(getAttribute(opening, 'aria-controls')).split(/\s+/).includes(containerId);
+      if (associatedOnly && !associated) continue;
+      if (getAttribute(opening, 'aria-busy').toLowerCase() === 'true') signals.push('BUSY_CONTENT');
+      if (!['button', 'a'].includes(match[1].toLowerCase()) && getAttribute(opening, 'role').toLowerCase() !== 'button') continue;
+      const label = safeVisibleText(findFirstTag(html.slice(match.index), match[1])).trim();
+      if (/^(?:展开全文|阅读全文|显示全文|加载更多|继续阅读|下一页|Show more|Read more|Load more|Continue reading|Next page)$/i.test(label)) signals.push('CONTINUATION_CONTROL');
+      if (getAttribute(opening, 'rel').split(/\s+/).includes('next')) signals.push('NEXT_PAGE_LINK');
+    }
+  };
+  inspect(container);
+  if (containerId) inspect(source, true);
+  return [...new Set(signals)];
 }
 
 function parseArticleHtml(html, observedUrl) {
   const source = stripDangerousAndHidden(String(html || ''));
-  const container = findArticleContainer(source);
+  const selection = findArticleContainer(source);
+  const container = selection.html;
   const bodyText = safeVisibleText(container);
   const title = safeVisibleText(findElementById(source, 'activity-name')) ||
     metaContent(source, 'og:title') ||
@@ -374,11 +417,20 @@ function parseArticleHtml(html, observedUrl) {
     .map((text) => text.trim())
     .filter(Boolean)
     .map((text) => ({ type: 'text', text }));
+  const openingTag = selection.openingTag || container.match(/^<[^>]+>/)?.[0] || '';
+  const continuationSignals = htmlContinuationSignals(container, source, decodeEntities(getAttribute(openingTag, 'id')));
   return {
     title,
     author,
     publishedTime,
     observedUrl,
+    container: { selector: selection.selector || 'body', matched: Boolean(selection.selector) },
+    continuationSignals: [...new Set(continuationSignals)],
+    completeness: {
+      status: continuationSignals.length ? 'partial' : 'unknown', fullTextVerified: false,
+      stopReason: continuationSignals.length ? 'CONTINUATION_PRESENT' : 'HTTP_SNAPSHOT',
+      caveat: 'An HTML snapshot cannot verify rendered or source completeness.'
+    },
     blocks,
     metrics: {
       textCharacters: bodyText.replace(/\s/g, '').length,
@@ -529,28 +581,6 @@ async function extractPage(page, extractorSource) {
   return page.evaluate((source) => (0, eval)(source), extractorSource);
 }
 
-async function expandKnownControls(page) {
-  const labels = ['展开全文', '阅读全文', '显示全文', 'Show more', 'Read more'];
-  for (const label of labels) {
-    try {
-      const locator = page.getByText(label, { exact: true }).first();
-      if (await locator.isVisible({ timeout: 300 })) {
-        await locator.click({ timeout: 1000 });
-        await page.waitForTimeout(300);
-      }
-    } catch {}
-  }
-}
-
-async function scrollForLazyContent(page) {
-  for (let step = 0; step < 10; step += 1) {
-    await page.evaluate(() => window.scrollBy(0, Math.max(window.innerHeight, 800)));
-    await page.waitForTimeout(180);
-  }
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.waitForTimeout(300);
-}
-
 async function runFixture(browser, extractorSource, fixtureName) {
   const fixturePath = path.join(__dirname, 'fixtures', fixtureName);
   const html = fs.readFileSync(fixturePath, 'utf8');
@@ -693,19 +723,27 @@ async function readArticleHttp(rawUrl, timeoutMs) {
 }
 
 async function readArticleBrowser(browser, extractorSource, rawUrl, timeoutMs) {
-  const url = validateUrl(rawUrl);
+  const url = await validatePublicTarget(rawUrl);
   const page = await browser.newPage();
   let navigationError = '';
+  let collected;
+  const publicHosts = new Map();
+  await page.route('**/*', async (route) => {
+    try {
+      const requestUrl = route.request().url();
+      if (/^(?:about|blob|data):/.test(requestUrl)) return route.continue();
+      const checked = validateUrl(requestUrl);
+      const hostname = new URL(checked).hostname;
+      if (!publicHosts.has(hostname)) publicHosts.set(hostname, validatePublicTarget(checked).then(() => true, () => false));
+      return await publicHosts.get(hostname) ? route.continue() : route.abort();
+    } catch { return route.abort(); }
+  });
   try {
     try {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
       await page.waitForTimeout(1200);
-      const initial = await extractPage(page, extractorSource);
-      const initialBlocker = classifyBlocker(initial, '', '');
-      if (!['CAPTCHA', 'LOGIN_WALL', 'PAYWALL', 'PERMISSION_DENIED', 'HOST_BROWSER_POLICY'].includes(initialBlocker)) {
-        await expandKnownControls(page);
-        await scrollForLazyContent(page);
-      }
+      await validatePublicTarget(page.url());
+      collected = await page.evaluate(fs.readFileSync(path.join(__dirname, 'collect-visible-article.js'), 'utf8'), { extractorSource, maxElapsedMs: Math.min(12000, timeoutMs) });
     } catch (error) {
       navigationError = error.message;
     }
@@ -713,7 +751,8 @@ async function readArticleBrowser(browser, extractorSource, rawUrl, timeoutMs) {
     let result = null;
     let html = '';
     try {
-      result = await extractPage(page, extractorSource);
+      result = collected?.extracted || await extractPage(page, extractorSource);
+      if (collected) result.completeness = collected.completeness;
       html = await page.content();
     } catch (error) {
       if (!navigationError) navigationError = error.message;
@@ -732,6 +771,7 @@ async function readArticleBrowser(browser, extractorSource, rawUrl, timeoutMs) {
           title: result?.title || '',
           textCharacters: result?.metrics?.textCharacters || 0,
           navigationError,
+          completeness: result?.completeness,
         },
       };
     }
@@ -751,7 +791,7 @@ async function main() {
     console.log('Usage: node scripts/read-article.cjs --preflight');
     console.log('       node scripts/read-article.cjs --url <url> [--mode auto|http|browser] [--out file] [--overwrite] [--timeout-ms 45000]');
     console.log('       node scripts/read-article.cjs --self-test');
-    console.log('Default auto: HTTP then at most one visible-DOM attempt. Stdout only unless --out is explicit.');
+    console.log('Default auto: HTTP then one visible-DOM page route; another installed runtime is tried only after a runtime failure. Stdout only unless --out is explicit.');
     return;
   }
 
@@ -882,7 +922,7 @@ async function main() {
   }
 }
 
-module.exports = { readArticleAuto, shouldTryBrowser, classifyBlocker, probePythonPlaywright };
+module.exports = { readArticleAuto, readAvailableBrowser, shouldTryBrowser, classifyBlocker, probePythonPlaywright, parseArticleHtml, validateUrl, validatePublicTarget, isPrivateLiteral };
 
 if (require.main === module) main().catch((error) => {
   // A failed output write must not retry the same write from the error handler.

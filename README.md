@@ -1,6 +1,6 @@
 # Article Reader — 文章读取、深度解读、工具评估与内容增强
 
-> 版本：v2.3.1（2026-09-24）
+> 版本：v2.4.0（2026-09-25）
 
 一个面向 AI Agent 的**四合一文章处理 Skill**：读取网页/PDF/飞书文档 → 深度解读 → 评估文章中介绍的工具是否值得安装 → 将文章加工为播客/Quiz/闪卡。
 
@@ -15,6 +15,8 @@
 - 只读抓取网页、微信公众号、今日头条、知乎、PDF、飞书文档等
 - 输出三段简报：文章讲什么 / 主要观点 / 初步可信度
 - 动态站点可在当前环境已安装 Playwright 时走临时浏览器路线；真实可读性按目标页面逐次验证
+- 动态长页使用有限滚动，并返回正文增量、停止原因与完整性；`PASS` 表示取得可分析正文，不承诺图片、分页和虚拟列表全部读完
+- 已授权的现有登录会话可由宿主受控浏览器只读接续；临时执行器不导出 Cookie、不复制个人 profile
 
 ### 2. 深度模式
 - 10+ 思维框架，四档深度可选：
@@ -26,6 +28,7 @@
 ### 3. 评估模式
 - 读取到的文章若在介绍 skill / 插件 / MCP / CLI / 工具，**自动穿透导读壳**，评估底层项目
 - 三轴评估：值得装（客观质量）/ 适合你（结合用户画像）/ 有风险（供应链、权限、外部组件、代码级扫描）
+- 分开记录文章宣传、官方说明、源码和本轮实测；核对本地/远程模式、会话、费用及数据去向，官方资料冲突保留为待核实
 - 内置安全扫描编排（aguara / skill-scanner / secrets-scan / structure-check）；缺任一必需扫描器时输出 INCOMPLETE，不会误报 SAFE
 - 绝不自动安装，先给「装不装」决策报告，用户确认后才给安装命令
 
@@ -44,14 +47,16 @@
 
 | 环境 | 安装路径 |
 |------|---------|
-| DSH | `~/.agents/skills/article-reader/` |
 | Claude Code | `~/.claude/skills/article-reader/` |
 | Codex | `~/.codex/skills/article-reader/` |
-| Hermes | `~/.hermes/skills/article-reader/` |
-| DeepSeek Harness | `~/.dsh/skills/article-reader/`（DSH 桌面版） |
+| Hermes | `<HERMES_HOME>/skills/article-reader/`；Windows Studio 默认 `%LOCALAPPDATA%/hermes/skills/`，其他环境以实际 Home 为准 |
+| DewuClaw | 当前工作区的 `skills/article-reader/`；某些桌面版本使用 `~/.dewuclaw/workspaces/<workspace>/skills/`，以原生列表/API 为准 |
+| DeepSeek Harness（DSH） | `~/.dsh/skills/article-reader/`；共享来源可用 `~/.agents/skills/`，注意同名 Skill 的加载优先级 |
 | 其他 Agent | 对应环境的 skills 目录 |
 
 3. 重开会话 / 重载技能生效
+
+覆盖前备份完整旧目录，备份放在 Skill 发现目录之外。复制后核对包内文件清单，再用宿主原生列表/加载器验证发现；文件复制、宿主发现和实际文章调用分别验收，不能互相替代。不要修改凭证、模型配置或其他 Skill 来完成安装。
 
 ### 方式 B：依赖检查
 
@@ -96,6 +101,8 @@ bash scripts/vetter/vett.sh "<skill-or-repo-or-path>"
 node scripts/read-article.cjs --self-test
 node scripts/test-routing.cjs
 node scripts/test-reader-routing.cjs
+node scripts/test-node-url-policy.cjs
+python -B scripts/test-reader-behavior.py
 python scripts/test-playwright-policy.py
 node scripts/test-quiz-renderer.mjs
 ```

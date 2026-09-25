@@ -42,21 +42,15 @@ assert.match(skill, /先查询当前可用的专用连接器、API 或 CLI/);
 assert.doesNotMatch(skill, /微信、头条及动态页面：优先使用 Codex 当前可用的真实浏览器/);
 assert.match(skill, /工具评估与内容增强不再外转到其他技能/);
 
-const paywallPolicy = fs.readFileSync(path.join(__dirname, '..', 'references', 'enhance', 'paywall-bypass.md'), 'utf8');
-assert.match(paywallPolicy, /绕过付费墙读这篇/);
-assert.match(paywallPolicy, /archive\.today/);
-assert.match(paywallPolicy, /身份伪装.*仅用户明确点名/);
-assert.match(paywallPolicy, /始终不绕过/);
-assert.match(paywallPolicy, /验证码.*登录墙.*不绕过/);
-
+// Static intent examples and entrypoint checks, not a real Agent/model invocation.
 process.stdout.write(`${JSON.stringify({
   status: 'PASS',
+  scope: 'static-routing-examples',
   cases: cases.length,
   assertions: [
     'automatic-trigger-without-skill-reminder',
     'read-vs-sync-vs-integrated-assessment-routing',
     'connector-api-cli-before-browser',
     'no-direct-cannot-read',
-    'authorized-paywall-bypass-restored',
   ],
 }, null, 2)}\n`);

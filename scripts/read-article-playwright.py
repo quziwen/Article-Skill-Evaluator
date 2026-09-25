@@ -19,6 +19,12 @@ from urllib.parse import urlsplit
 
 
 ALLOWED_LOCAL_SCHEMES = {"about", "blob", "data"}
+ADDRESS_POLICY = json.loads(Path(__file__).with_name("public-address-policy.json").read_text(encoding="utf-8"))
+ADDRESS_RANGES = {
+    family: {kind: tuple(ipaddress.ip_network(cidr) for cidr in ADDRESS_POLICY[family][kind])
+             for kind in ("blocked", "exceptions")}
+    for family in ("ipv4", "ipv6")
+}
 
 
 class UrlPolicyError(ValueError):
@@ -26,8 +32,13 @@ class UrlPolicyError(ValueError):
 
 
 def _is_forbidden_ip(value: str) -> bool:
+    if "%" in value:
+        return True
     address = ipaddress.ip_address(value)
-    return not address.is_global
+    if address.version == 6 and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    ranges = ADDRESS_RANGES["ipv4" if address.version == 4 else "ipv6"]
+    return not any(address in network for network in ranges["exceptions"]) and any(address in network for network in ranges["blocked"])
 
 
 def validate_public_url(url: str, *, resolve_dns: bool = True) -> str:
@@ -50,8 +61,8 @@ def validate_public_url(url: str, *, resolve_dns: bool = True) -> str:
     except ValueError:
         literal_address = None
     if literal_address is not None:
-        if not literal_address.is_global:
-            raise UrlPolicyError("private, link-local, loopback and reserved addresses are not allowed")
+        if _is_forbidden_ip(hostname):
+            raise UrlPolicyError("private, link-local, loopback, reserved and multicast addresses are not allowed")
         return candidate
 
     if resolve_dns:
@@ -126,9 +137,10 @@ def _print_summary(payload: dict[str, object]) -> None:
     print(json.dumps(payload, ensure_ascii=True, separators=(",", ":")))
 
 
-def extract_visible_page(page) -> dict[str, object]:
+def extract_visible_page(page, extracted=None) -> dict[str, object]:
     """Use the same sanitized, single-container extractor as the Node reader."""
-    extracted = page.evaluate(Path(__file__).with_name("extract-visible-article.js").read_text(encoding="utf-8"))
+    if extracted is None:
+        extracted = page.evaluate(Path(__file__).with_name("extract-visible-article.js").read_text(encoding="utf-8"))
     body_text = page.locator("body").inner_text(timeout=10000)
     html = page.content()
     container = extracted.get("container", {})
@@ -149,6 +161,17 @@ def extract_visible_page(page) -> dict[str, object]:
     }
     if status == "PASS" and result["has_captcha_marker"]:
         result["warn"] = "PAGE_HAS_CHALLENGE_MARKER_WITH_VISIBLE_ARTICLE"
+    return result
+
+
+def collect_visible_page(page, **limits) -> dict[str, object]:
+    """Wait for dynamic text and scroll within fixed limits; never click or submit."""
+    collected = page.evaluate(
+        Path(__file__).with_name("collect-visible-article.js").read_text(encoding="utf-8"),
+        {"extractorSource": Path(__file__).with_name("extract-visible-article.js").read_text(encoding="utf-8"), **limits},
+    )
+    result = extract_visible_page(page, collected["extracted"])
+    result["completeness"] = collected["completeness"]
     return result
 
 
@@ -190,13 +213,7 @@ def read_article(url: str, timeout_ms: int = 45000) -> dict[str, object]:
             page.wait_for_timeout(1500)
 
             validate_public_url(page.url)
-            result.update(extract_visible_page(page))
-            if result["status"] == "PASS":
-                for _ in range(3):
-                    page.mouse.wheel(0, 2400)
-                    page.wait_for_timeout(700)
-                # Re-extract the same container after lazy rendering; never append the whole page.
-                result.update(extract_visible_page(page))
+            result.update(collect_visible_page(page, maxElapsedMs=min(12000, timeout_ms)))
         except UrlPolicyError as exc:
             result["status"] = "BLOCKED_ADDRESS"
             result["error"] = str(exc)

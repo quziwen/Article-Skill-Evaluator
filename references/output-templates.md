@@ -42,9 +42,14 @@
 
 **待确认**
 - <需要权威来源、内部数据或实测确认的内容>
+
+**读取范围**（仅有影响判断的缺口时）
+- <已取得哪些内容；长页停止原因、未读分页/图片文字；不要把 PASS 直接写成全文已读>
 ```
 
 ## 读取失败
+
+仅在没有可用正文时使用下方模板。`status=BLOCKED` 但有 `partialResult` 时，先核对其中的真实正文，说明已读范围和后备路线为何受阻；足以回应的部分可按“完整评判”给有限判断，不能写成完全未取得正文。
 
 ```markdown
 **结论**
@@ -56,7 +61,7 @@
 
 **阻断原因**
 <LOGIN_WALL / PAYWALL / CAPTCHA / PERMISSION_DENIED / ANTI_BOT /
-TOOL_MISSING / NETWORK_ERROR / EMPTY_OR_SHELL_PAGE / UNSUPPORTED_FORMAT>
+TOOL_MISSING / NETWORK_ERROR / EMPTY_OR_SHELL_PAGE / UNSUPPORTED_FORMAT / HOST_BROWSER_POLICY>
 
 **最小补救**
 <一个具体动作，例如提供公开链接、导出 PDF 或粘贴正文>

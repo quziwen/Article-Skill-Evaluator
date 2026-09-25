@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -14,6 +15,20 @@ SPEC.loader.exec_module(MODULE)
 
 
 class UrlPolicyTests(unittest.TestCase):
+    def test_shared_public_address_cases(self) -> None:
+        cases = json.loads(SCRIPT.with_name("fixtures").joinpath("url-policy-cases.json").read_text(encoding="utf-8"))
+        for case in cases:
+            address = case["address"]
+            host = f"[{address}]" if ":" in address else address
+            url = f"https://{host}/article"
+            with self.subTest(address=address):
+                self.assertEqual(not case["allowed"], MODULE._is_forbidden_ip(address))
+                if case["allowed"]:
+                    self.assertEqual(url, MODULE.validate_public_url(url, resolve_dns=False))
+                else:
+                    with self.assertRaises(MODULE.UrlPolicyError):
+                        MODULE.validate_public_url(url, resolve_dns=False)
+
     def test_rejects_non_http_credentials_and_local_names(self) -> None:
         for value in (
             "file:///etc/passwd",
