@@ -1,4 +1,4 @@
 interface:
-  display_name: "文章读取与评判"
-  short_description: "只读抓取并评判网页、微信和头条文章，明确报告阻断原因。"
-  default_prompt: "使用 $article-reader 自动读取并评判这个链接；先尝试专用只读连接器、API 或 CLI，必要时再使用浏览器，不做归档或外部写入。"
+  display_name: "Article-Skill-Evaluator"
+  short_description: "读取文字与网页，核验工具真实性、安全性、九维质量及实际使用价值。"
+  default_prompt: "使用 $article-skill-evaluator 自动读取并评判这个链接；先尝试专用只读连接器、API 或 CLI，必要时再使用浏览器，不做归档或外部写入。"

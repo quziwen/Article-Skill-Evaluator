@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const renderer = path.join(scriptDir, 'render-quiz.mjs');
 const fixture = path.join(scriptDir, 'fixtures', 'quiz-sample.json');
-const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'article-reader-quiz-'));
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'article-skill-evaluator-quiz-'));
 
 try {
   const first = spawnSync(process.execPath, [renderer, '--input', fixture, '--format', 'all', '--out-dir', temp], { encoding: 'utf8' });

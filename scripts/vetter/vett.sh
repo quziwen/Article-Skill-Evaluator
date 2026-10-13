@@ -11,11 +11,11 @@ fi
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P) || exit 2
 TEMP_PARENT=$(cd "${TMPDIR:-/tmp}" && pwd -P) || exit 2
-TEMP_ROOT=$(mktemp -d "$TEMP_PARENT/article-reader-vetter.XXXXXX") || exit 2
+TEMP_ROOT=$(mktemp -d "$TEMP_PARENT/article-skill-evaluator-vetter.XXXXXX") || exit 2
 cleanup() {
     local resolved
     resolved=$(cd "$TEMP_ROOT" && pwd -P) || return
-    if [[ "$(dirname "$resolved")" == "$TEMP_PARENT" && "$(basename "$resolved")" == article-reader-vetter.* ]]; then
+    if [[ "$(dirname "$resolved")" == "$TEMP_PARENT" && "$(basename "$resolved")" == article-skill-evaluator-vetter.* ]]; then
         rm -rf -- "$resolved"
     else
         echo "INCOMPLETE: refusing cleanup outside the verified temporary directory" >&2

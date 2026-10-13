@@ -1,7 +1,7 @@
 ---
-name: article-reader
-metadata: {version: "2.4.0"}
-description: 文章只读读取、深度解读、工具评估与内容增强。适用于网页、博客、PDF、飞书文档以及微信、头条等动态文章；也适用于文章中介绍的 Skill、Plugin、MCP、CLI 或 Agent 工具的真实性、安全性、重复性与安装价值评估。用户说“读一下”“总结”“分析”“评价”“深入研究”“这个工具值不值得装”“做成播客”“出 Quiz”“生成闪卡”，或只提供文章 URL 时使用。遇到“绕过付费墙”请求也触发本 Skill，但只提供用户已有授权会话、用户导出文件或发布方公开替代版本的合法读取路线，不绕过访问控制。默认不保存、不归档、不同步、不发送消息、不修改外部内容；用户明确要求归档或同步时改用 article-sync。
+name: article-skill-evaluator
+metadata: {version: "2.6.0"}
+description: 读取粘贴文字、本地文本及网页，HTTP受阻自动接续Playwright；评价内容真实性、证据和使用价值，整合工具安全审查、Skill九维质量评估、实际行为测试和个性化安装决策。适用于网页、博客、PDF、飞书文档以及微信、头条等动态文章；也适用于文章中介绍的 Skill、Plugin、MCP、CLI 或 Agent 工具的真实性、安全性、重复性与安装价值评估。用户说“读一下”“总结”“分析”“评价”“深入研究”“这个工具值不值得装”“做成播客”“出 Quiz”“生成闪卡”，或只提供文章 URL 时使用。遇到“绕过付费墙”请求也触发本 Skill，但只提供用户已有授权会话、用户导出文件或发布方公开替代版本的合法读取路线，不绕过访问控制。默认不保存、不归档、不同步、不发送消息、不修改外部内容；用户明确要求归档或同步时改用 article-sync。
 ---
 
 # 文章读取、深度解读、工具评估与内容增强
@@ -10,7 +10,7 @@ description: 文章只读读取、深度解读、工具评估与内容增强。�
 
 ## 硬规则
 
-- 自动触发本 Skill：不要询问用户是否安装了读取 Skill，也不要等用户点名 `article-reader`。
+- 自动触发本 Skill：不要询问用户是否安装了读取 Skill，也不要等用户点名 `article-skill-evaluator`。
 - 用户给出明确链接并要求阅读、总结、分析或评价时，至少实际尝试一种当前可用的读取路线；不得先回答“不能读取”再等用户指出 Skill。
 - 语义读取链接时，先查询当前可用的专用连接器、API 或 CLI；存在适用的只读路线时先使用它，不要先启动 Browser。
 - 用户只贴一个文章链接且上下文没有其他指令时，默认读取并返回“文章讲什么、主要观点、初步可信度”三段简报；若正文是介绍工具的导读壳，自动跟进评估模式。
@@ -30,7 +30,7 @@ description: 文章只读读取、深度解读、工具评估与内容增强。�
 1. 用户说“存”“归档”“保存到知识库”“同步” → 停止本 Skill，改用 `article-sync`。
 2. 其他文章阅读、总结、分析、评价、深度解读、工具评估、内容增强或观点提取 → 使用本 Skill。
 
-本 Skill 已合并原 article-skill-evaluator / skill-install-advisor / claude-tool-evaluator / skill-vetter / Content-Enhancer 的能力，工具评估与内容增强不再外转到其他技能。
+本 Skill 由 article-reader 统一更名而来，承接文章工具评估、安装适配、安全扫描编排与内容增强，工具评估与内容增强不再外转到其他技能。另内置通用 skill-evaluator 的九维装前评价口径，并接入 skill-test 的行为测试流程；这是能力与流程整合，不是把三个名称当作同一个工具，也不声称已捆绑所有外部运行器。用户只需使用 article-skill-evaluator，由它取得内容、核验、组织测试并汇总最终判断。
 
 ## 模式分流
 
@@ -45,7 +45,7 @@ description: 文章只读读取、深度解读、工具评估与内容增强。�
 
 ## 读取流程
 
-1. 识别输入类型、来源域名和用户要的产出深度。
+1. 识别输入类型、来源域名和用户要的产出深度。粘贴文字或本地文本直接读取，跳过网页抓取；无须为了评价已有文字再次要求URL。正文涉及工具时同样进入评估流程，明确禁止联网时只用已给材料并列出核验缺口。
 2. 读取 [references/source-routing.md](references/source-routing.md)，选择首选路线；涉及真实浏览器时同时读取 [references/browser-runtime.md](references/browser-runtime.md)。
 3. 先查询并调用适用的专用只读连接器、API 或 CLI。使用本 Skill 执行器时先运行 `node scripts/read-article.cjs --preflight`，再运行 `node scripts/read-article.cjs --url "<url>"`。默认 `auto` 先读取公开 HTTP；反爬、空壳、网络失败或 HTTP 验证页会触发一次原始公开链接的浏览器尝试，优先使用已安装的 Python Playwright，其次是已安装的 Node Playwright。
 4. 回读结果的 `attempts`，区分实际 HTTP 请求、浏览器预检和真实 DOM 读取；Node Playwright 缺失不代表 Python Playwright 不可用。两种本地浏览器执行器均不可用或确需用户交互时，再按 `browser-runtime.md` 选择当前受控浏览器工具。不能把“建议使用浏览器”当作已尝试。
@@ -99,10 +99,12 @@ bash scripts/vetter/vett.sh "<skill-or-repo-or-path>"
 - 标题与正文主题一致。
 - 正文不是登录、验证、导航、广告或错误页面。
 - 段落连续，未只取得开头摘要。
-- 动态长页检查滚动后是否有新增正文。读取受滚动次数和时间上限约束；记录停止原因、已读范围及 `completeness`。达到上限、仍有“继续阅读”或分页、图片中的关键文字未提取时，明确部分读取，不能因 `status: PASS` 就声称全文完整。
+- 动态长页检查滚动后是否有新增正文。每8次滚动只是同页接续检查点，默认继续到稳定底部，整次最多60次/30秒；无法滚动且正文无变化连续3次时标记 STALLED_SCROLL。读取受整体次数和时间上限约束；记录停止原因、已读范围及 `completeness`。达到上限、仍有“继续阅读”或分页、图片中的关键文字未提取时，明确部分读取，不能因 `status: PASS` 就声称全文完整。
 - 页面达到稳定底部只说明当前可见 DOM 稳定；对虚拟列表、图片正文和跨页文章仍需核对缺口。需要接续时使用当前获准会话或可见下一页，设定本轮范围；不创建无限爬取任务或静默拼接推荐内容。
 - 关键表格、引文和数据口径可追溯到原文位置或来源链接。
 - 作者、时间、来源缺失时标记“未取得”，不猜测。
+
+不要把单次批次结束、PASS或“如实标注部分”当成任务完成。部分结果须继续检查已获准的正文展开、分页及图片；能继续就继续，确有阻断或整体预算耗尽时写清缺口和接手条件，不能宣布全文读取完成。图片主要内容未经检查时，不因DOM到底就称整篇已读完。
 
 完整性不足但仍可分析时，使用“基于已取得内容的有限判断”，列明缺口；正文完全不可用时，输出标准失败报告。
 
@@ -149,15 +151,15 @@ bash scripts/vetter/vett.sh "<skill-or-repo-or-path>"
 ```
 用户提供内容
     ↓
-询问：目的 + 深度级别 + 偏好框架（用户无响应则默认级别2标准模式）
+沿用已给出的目的、深度与框架；未指定则按下述默认值直接分析
     ↓
 ┌──────────────┬──────────────┬──────────────┬──────────────┐
 │ 级别1 快速    │ 级别2 标准   │ 级别3 深度   │ 级别4 研究   │
 │ 15分钟        │ 30分钟       │ 60分钟       │ 120分钟+     │
 ├──────────────┼──────────────┼──────────────┼──────────────┤
 │ SCQA         │ 级别1 +      │ 级别2 +      │ 级别3 +      │
-│ 5W2H         │ 批判性思维   │ 逆向思维     │ 跨源对比     │
-│ 结构分析     │              │ 心智模型     │ 网络搜索     │
+│ 5W2H         │ 批判性思维   │ 心智模型     │ 跨源对比     │
+│ 结构分析     │ 逆向思维     │              │ 网络搜索     │
 │              │              │ 第一性原理   │ 综合         │
 │              │              │ 系统思维     │              │
 │              │              │ 六顶思考帽   │              │
@@ -166,10 +168,7 @@ bash scripts/vetter/vett.sh "<skill-or-repo-or-path>"
 
 ### 步骤1：初始化分析
 
-询问用户（对话式）：
-1. 阅读目的：解决问题 / 学习 / 写作 / 决策 / 好奇心
-2. 深度级别：快速 / 标准 / 深度 / 研究
-3. 是否使用特定框架（无响应则按内容类型自动建议）
+先读取用户已有要求，不重复询问已明确的目的、级别或框架。未指定目的时以理解文章为目标，未指定深度时默认级别2，未指定框架时按内容选择。只在缺少的信息会实质改变分析结论或任务范围时，提出一个具体问题；已有正文足以分析的部分继续完成。
 
 框架选择指南（按内容类型自动建议）：
 
@@ -198,7 +197,7 @@ bash scripts/vetter/vett.sh "<skill-or-repo-or-path>"
 关键概念：[3-5个术语及简要定义]
 ```
 
-级别1+ 追加 SCQA 分析（加载 `scqa_framework.md`）；级别2+ 追加 5W2H 完整性检查（加载 `5w2h_analysis.md`）。
+级别1+ 追加 SCQA 分析（加载 `scqa_framework.md`）；级别1+ 追加 5W2H 完整性检查（加载 `5w2h_analysis.md`）。
 
 ### 步骤3：应用思维模型（按深度级别）
 
@@ -232,11 +231,11 @@ bash scripts/vetter/vett.sh "<skill-or-repo-or-path>"
 
 ## 评估模式
 
-当用户要求评估某个 skill/插件/工具是否值得装，或读取到的正文是介绍工具/技能的导读壳时，进入本模式。核心：穿透导读壳 → 识别类型 → 三轴评估（值得装/适合当前用户/有风险）→ 查重对比 → 安全扫描 → 输出「装不装」决策报告。
+当用户要求评估某个 skill/插件/工具是否值得装，或读取到的正文是介绍工具/技能的导读壳时，进入本模式。核心：取得文字/网页 → 核实原文与实际项目 → 安全审查 → Skill九维质量评分 → 实际行为测试 → 使用者价值与查重 → 输出「真不真、安全不安全、能不能装、值不值得装、怎么用」的统一决策报告。
 
-**完整流程、用户画像、输出模板见 [references/evaluation/evaluation-workflow.md](references/evaluation/evaluation-workflow.md)，评估前必须读取。** 普通“读一下”先给文章简报和影响判断的关键核验；只有安装决策或明确要求全面评估时，才进入完整源码与扫描流程。关键要点：
+**完整流程、用户画像、输出模板见 [references/evaluation/evaluation-workflow.md](references/evaluation/evaluation-workflow.md)，评估前必须读取。** 普通“读一下”先给文章简报和影响判断的关键核验；工具评价、安装决策或全面评估时读取 [quality-and-testing.md](references/evaluation/quality-and-testing.md)，进入完整源码、安全、九维与测试流程。普通文章评价不套用安装流程。关键要点：
 
-1. **用户画像校准**：评估"适合我吗"先按 [references/evaluation/user-profile.md](references/evaluation/user-profile.md) 的方法获取**当前用户**的画像（读 AGENTS.md/CLAUDE.md/用户描述 → 对话说明 → 记忆 → 一句话确认 → 通用默认），不要使用作者示例画像（[user-profile.example.md](references/evaluation/user-profile.example.md) 仅供参考格式）。画像不足时结论写"暂无法判定"。
+1. **用户画像校准**：评估"适合我吗"先按 [references/evaluation/user-profile.md](references/evaluation/user-profile.md) 的方法获取**当前用户**的画像（本次明确目标优先；结合适用规则与有效画像，缺关键信息才问，未知不猜），不要使用作者示例画像（[user-profile.example.md](references/evaluation/user-profile.example.md) 仅供参考格式）。画像不足时结论写"暂无法判定"。
 2. **壳穿透**：多数链接是中文导读壳，真正要评估的是其指向的 GitHub 仓库/官网。报告注明「来源文章：<壳>，实际评估对象：<仓库>」。
 3. **类型识别**：Skill / Plugin / MCP / CLI / 别家平台专属 / 纯知识。细节见 `references/evaluation/extension-types.md`。
 4. **三轴独立评估**：值得装（客观质量）/ 适合当前用户（按用户画像判定契合度）/ 有风险（供应链、权限数据、风险留痕、外部组件、代码级）。
@@ -244,13 +243,15 @@ bash scripts/vetter/vett.sh "<skill-or-repo-or-path>"
 5. **外部组件单独评**：skill 只是薄壳时，真本事在它调用的外部组件（包、二进制、浏览器驱动、CLI）——vetter 扫不到，必须单独评估来源、提权、凭证、ToS。见 `evaluation-workflow.md` 轴 C。
 6. **安全扫描**：评估对象可拉取且结论偏向建议装时，安装前运行 `bash scripts/vetter/vett.sh "<url-or-path>"`（说明见 [references/evaluation/vetter.md](references/evaluation/vetter.md)），吸收 BLOCKED/REVIEW/INCOMPLETE/SAFE 裁决。任一必需扫描器缺失、报错或输出无法识别时只能标记 INCOMPLETE，不得写 SAFE。
 7. **查重对比**：对照已装 skill（`~/.agents/skills/`、`~/.claude/skills/`、`~/.codex/skills/`）描述比对，有重叠则做五维对比（功能/易用/维护/成本/工作流契合），结论落到具体维度。
-8. **绝不自动安装**：先给决策报告，用户确认后才给安装命令。
+8. **九维与实测**：Skill按完整性、明确性、可执行性、失败分支、风险边界、黑名单、可测试性、维护性、一致性评分；其他工具不硬套Skill分数。按 `quality-and-testing.md` 使用可用的 skill-test 或同契约的隔离测试，记录独立评分与实际工具证据。没有执行能力标未验证，不以文档高分代替实测。
+9. **决策与价值**：单列真实性、安全性、安装条件、用户价值、重复工具及可验收应用场景。安全阻断、核心实测失败不能被高分抵消；关键缺证据暂缓。
+10. **安装决定**：先交付可审阅报告；没有安装授权不安装，已有同范围明确授权不重复询问。安装状态和测试结果分别记录。
 
 ## 增强模式
 
 当用户要求“做成播客/生成音频、出 Quiz/闪卡”或读取付费文章时，进入本模式。对内容做加工前必须已经取得正文；付费文章只走授权读取路线。细节见 `references/enhance/`。
 
-1. **文章转播客（TTS）**：结构化内容为播客脚本（开场引入→章节要点→总结收尾）→ 调用 `text_to_speech` 生成 MP3 → 输出到桌面或指定位置。细节见 [references/enhance/podcast.md](references/enhance/podcast.md)。触发："把这篇文章做成播客""生成音频摘要"。
+1. **文章转播客（TTS）**：先生成忠于正文的播客稿；按参考文件探测宿主实际可用的 TTS 工具并读取调用参数。工具缺失或本次禁止外部调用时，交付对话内播客稿并明确音频未生成；音频仅写用户指定路径，未指定路径时先给稿并询问保存目录，不默认保存到桌面。细节见 [references/enhance/podcast.md](references/enhance/podcast.md)。触发："把这篇文章做成播客""生成音频摘要"。
 2. **Quiz/闪卡生成**：提取关键知识点，生成 3—5 道题和闪卡。默认直接在对话中给 Markdown，不创建文件；用户明确要求 HTML、Anki、Markdown 文件或三种文件时，才运行 `scripts/render-quiz.mjs` 写指定产物。HTML 为无外部依赖的单文件；Anki 为 UTF-8 BOM CSV；已有文件默认不覆盖。细节和回归命令见 [references/enhance/quiz-flashcard.md](references/enhance/quiz-flashcard.md)。
 3. **付费内容授权读取**：默认遇墙停止。用户明确要求读取时，只可使用用户已有且明确允许本次只读使用的订阅会话、用户导出文件、机构授权渠道或发布方公开替代版本；不得伪装身份、清 Cookie、伪造 Referer、用代理或缓存规避控制。细节见 [references/enhance/paywall-bypass.md](references/enhance/paywall-bypass.md)。
 
@@ -290,7 +291,8 @@ bash scripts/vetter/vett.sh "<skill-or-repo-or-path>"
 - 是否说明了会影响结论的内容缺口。
 - 是否把失败原因归类并给出已尝试路线。
 - 深度模式下：是否按选择的深度级别应用框架，没有全量堆砌；是否以可操作步骤结束。
-- 评估模式下：是否穿透导读壳到真实仓库；三轴是否各自独立出结论；是否对照用户画像；是否单独评估外部组件；是否含内控提示；是否跑 vetter（或注明未执行）；是否没有自动安装。
+- 评估模式下：是否穿透导读壳到真实仓库；三轴是否各自独立出结论；是否对照用户画像；是否单独评估外部组件；是否含内控提示；是否跑 vetter（或注明未执行）；是否给出适用的九维与真实测试结果/缺口、具体用户价值；是否区分安装条件和安装价值、没有未经授权安装。
 - 增强模式下：播客/Quiz 是否忠于原文内容不编造；文件是否只在用户明确要求时写入；付费内容是否只使用授权渠道并标注实际来源。
 - 修改执行器后，是否运行 `node scripts/read-article.cjs --self-test` 与 `node scripts/test-reader-routing.cjs`，覆盖正常正文、验证/登录负例、正文去重和自动路线；浏览器测试未运行时总结果必须为 PARTIAL，不能写全流程通过。涉及 URL/输出保护时运行 Node 的 `test-node-url-policy.cjs` 和 Python 的 `test-playwright-policy.py`；涉及 Quiz 时运行 `test-quiz-renderer.mjs`。
 - 修改触发或分流后，是否运行 `node scripts/test-routing.cjs` 并通过阅读、归档、工具评估和裸链接用例。
+

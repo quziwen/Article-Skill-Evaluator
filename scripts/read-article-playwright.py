@@ -213,7 +213,7 @@ def read_article(url: str, timeout_ms: int = 45000) -> dict[str, object]:
             page.wait_for_timeout(1500)
 
             validate_public_url(page.url)
-            result.update(collect_visible_page(page, maxElapsedMs=min(12000, timeout_ms)))
+            result.update(collect_visible_page(page, maxElapsedMs=min(30000, timeout_ms)))
         except UrlPolicyError as exc:
             result["status"] = "BLOCKED_ADDRESS"
             result["error"] = str(exc)
@@ -276,3 +276,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

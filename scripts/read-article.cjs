@@ -145,7 +145,7 @@ async function readAvailableBrowser(rawUrl, timeoutMs, adapters = {}) {
   if (python.available) {
     let output;
     try {
-      output = (adapters.pythonJson || pythonJson)(python.executable, 'read-article-playwright.py', [rawUrl, '--stdout', '--timeout-ms', String(timeoutMs)], timeoutMs + 30000);
+      output = (adapters.pythonJson || pythonJson)(python.executable, 'read-article-playwright.py', [rawUrl, '--stdout', '--timeout-ms', String(timeoutMs)], timeoutMs + Math.min(30000, timeoutMs) + 15000);
     } catch (error) {
       output = { status: error.code === 'ETIMEDOUT' ? 'NETWORK_ERROR' : 'TOOL_ERROR', error: error.code || 'INVALID_OUTPUT' };
     }
@@ -743,7 +743,7 @@ async function readArticleBrowser(browser, extractorSource, rawUrl, timeoutMs) {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
       await page.waitForTimeout(1200);
       await validatePublicTarget(page.url());
-      collected = await page.evaluate(fs.readFileSync(path.join(__dirname, 'collect-visible-article.js'), 'utf8'), { extractorSource, maxElapsedMs: Math.min(12000, timeoutMs) });
+      collected = await page.evaluate(fs.readFileSync(path.join(__dirname, 'collect-visible-article.js'), 'utf8'), { extractorSource, maxElapsedMs: Math.min(30000, timeoutMs) });
     } catch (error) {
       navigationError = error.message;
     }
@@ -935,3 +935,4 @@ if (require.main === module) main().catch((error) => {
     writes: 'none',
   }, 1);
 });
+
